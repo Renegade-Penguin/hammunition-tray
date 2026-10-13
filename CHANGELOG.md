@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Fix: a deeply nested flow mapping in the linger record or a devices/services data file no longer escapes the helper as `RecursionError`; the reader says the file is nested too deeply and treats it as unusable. Found by the weekly fuzz run of `fuzz_linger_record.py` (run 38209891448); `load_yaml` had the same hole.
+
 - README: the helper's prerequisite now says when `hardware apply` writes the helper (only where no contract-1 helper answers), that the catalog units install it, and which device classes the engine catalog marks parkable (#12).
 - Keep the suite board current: a `project-sync` caller for GYST v1.12.0 (Hammunition #362) adds this repository's issues and pull requests to the Renegade-Penguin board, sets status and done date, and reconciles weekly.
 - The project moved from the `ChiefGyk3D` user to the `Renegade-Penguin` organization (Hammunition #359, epic #357): every suite repository URL, badge and link now points at the organization.
