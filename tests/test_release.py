@@ -96,7 +96,6 @@ class GystCallers(unittest.TestCase):
             self.assertTrue(self.gyst_problems("bad.yml", text)[1], bad)
 
     def test_every_other_action_is_pinned_by_a_40_hex_sha(self):
-        import re
 
         for text in ALL_WORKFLOWS.values():
             for ref in re.findall(r"uses: (?!ChiefGyk3D/git-your-ship-together)\S+@(\S+)", text):
@@ -165,7 +164,6 @@ class Workflow(unittest.TestCase):
     def test_the_mirror_rewrite_does_not_double_the_direct_path(self):
         # deb.parrot.sh/direct/parrot became mirror.parrot.sh/direct/direct/parrot
         # and the second attempt died with "does not have a Release file".
-        import re
         import subprocess
 
         m = re.search(r'-exec sed -i -E "([^"]+)"', PARROT)
