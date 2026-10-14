@@ -151,6 +151,10 @@ def read_record(path: Path | None = None, notes: list[str] | None = None) -> Lin
     except yaml.YAMLError:
         sink.append(f"{path} is not valid YAML")
         return None
+    except RecursionError:
+        # PyYAML recurses per nesting level; hostile nesting must not escape.
+        sink.append(f"{path} is nested too deeply")
+        return None
     if not isinstance(data, dict) or "uid" not in data:
         return None
     try:

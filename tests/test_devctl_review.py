@@ -19,7 +19,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from hammunition_devctl import devctl, devices, engine, linger, power
+from hammunition_devctl import datafiles, devctl, devices, engine, linger, power
 from hammunition_devctl.devctl import main
 from hammunition_devctl.polkit import WritabilityFinding, WritabilityRisk
 
@@ -369,3 +369,25 @@ def test_install_sh_warns_about_an_interpreter_a_user_owns(tmp_path: Path) -> No
     done = _script("install.sh", tmp_path / "root", "--helper-only", "--yes", "--interpreter", str(interp))
     assert done.returncode == 0
     assert "owned by a non-root account" in done.stderr
+
+
+# A deeply nested flow mapping makes PyYAML recurse until RecursionError. The
+# weekly fuzz run found it in the linger record; load_yaml reads the same way.
+# Both readers must say "unusable, with a note" instead of letting it escape.
+_DEEP_YAML = "{" * 5000
+
+
+def test_linger_record_with_hostile_nesting_is_absent_with_a_note(tmp_path: Path) -> None:
+    path = tmp_path / "linger.yaml"
+    path.write_text(_DEEP_YAML)
+    notes: list[str] = []
+    assert linger.read_record(path=path, notes=notes) is None
+    assert any("nested too deeply" in n for n in notes), notes
+
+
+def test_data_file_with_hostile_nesting_is_absent_with_a_note(tmp_path: Path) -> None:
+    path = tmp_path / "devices.yaml"
+    path.write_text(_DEEP_YAML)
+    notes: list[str] = []
+    assert datafiles.load_yaml(path, notes) is None
+    assert any("nested too deeply" in n for n in notes), notes

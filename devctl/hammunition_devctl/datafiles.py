@@ -119,6 +119,10 @@ def load_yaml(path: Path, notes: list[str]) -> dict[str, Any] | None:
     except yaml.YAMLError as exc:
         notes.append(f"{path} is not valid YAML: {str(exc).splitlines()[0] if str(exc) else exc}")
         return None
+    except RecursionError:
+        # PyYAML recurses per nesting level; hostile nesting must not escape.
+        notes.append(f"{path} is nested too deeply")
+        return None
     if not isinstance(data, dict):
         notes.append(f"{path} does not hold a mapping")
         return None
