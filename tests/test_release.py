@@ -50,7 +50,7 @@ if __name__ == "__main__":
 
 
 GYST = "ChiefGyk3D/git-your-ship-together/.github/workflows/"
-GYST_SHA = "b9db99287236b19f0249f83b54acc5cc41126e42"  # v1.25.0's commit, not its tag object
+GYST_SHA = "6f40107c2e05483f485452991e422f7f63886000"  # v1.25.0's commit, not its tag object
 
 RELEASE = (ROOT / ".github/workflows/release.yml").read_text()
 CI = (ROOT / ".github/workflows/ci.yml").read_text()
