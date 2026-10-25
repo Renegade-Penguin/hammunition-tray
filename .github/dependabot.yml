@@ -10,6 +10,9 @@ updates:
     # waiting a week before proposing it costs nothing.
     cooldown:
       default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
   # The helper's own pyproject (its one runtime dependency is PyYAML).
   - package-ecosystem: pip
     directory: /devctl
