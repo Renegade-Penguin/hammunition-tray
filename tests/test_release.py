@@ -50,7 +50,7 @@ if __name__ == "__main__":
 
 
 GYST = "ChiefGyk3D/git-your-ship-together/.github/workflows/"
-GYST_SHA = "6f40107c2e05483f485452991e422f7f63886000"  # v1.25.1's commit, not its tag object
+GYST_SHA = "f344c638e1316d43514a41e4a22f172583c271fc"  # v1.26.0's commit, not its tag object
 
 RELEASE = (ROOT / ".github/workflows/release.yml").read_text()
 CI = (ROOT / ".github/workflows/ci.yml").read_text()
@@ -70,7 +70,7 @@ class GystCallers(unittest.TestCase):
     commit (an annotated tag's own sha is a tag object, not a commit)."""
 
     STRICT = re.compile(
-        r"^uses: " + re.escape(GYST) + r"[a-z-]+\.yml@" + GYST_SHA + r" # v1\.25\.1$"
+        r"^uses: " + re.escape(GYST) + r"[a-z-]+\.yml@" + GYST_SHA + r" # v1\.26\.0$"
     )
 
     def gyst_problems(self, name, text):
@@ -91,7 +91,7 @@ class GystCallers(unittest.TestCase):
             self.assertTrue([r for r in refs if self.STRICT.match(r)], name)
 
     def test_the_gyst_pin_check_rejects_a_floating_reference(self):
-        for bad in ("@main", "@v1.25.1", "@" + GYST_SHA, "@" + GYST_SHA + "  # v1.25.1", "@" + GYST_SHA + " # v1.14.0"):
+        for bad in ("@main", "@v1.26.0", "@" + GYST_SHA, "@" + GYST_SHA + "  # v1.26.0", "@" + GYST_SHA + " # v1.14.0"):
             text = "    uses: " + GYST + "ci.yml" + bad + "\n"
             self.assertTrue(self.gyst_problems("bad.yml", text)[1], bad)
 
