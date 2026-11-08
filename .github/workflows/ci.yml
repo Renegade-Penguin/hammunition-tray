@@ -42,7 +42,7 @@ jobs:
   # turns a missing node into a failure, not a skip. The Qt tests skip here
   # (no PyQt6 in these environments) and run in `qt` below.
   ci:
-    uses: ChiefGyk3D/git-your-ship-together/.github/workflows/python-ci.yml@7501cb3fa19d83d0e0a131cb040e7c4da32a9504 # v1.28.0
+    uses: ChiefGyk3D/git-your-ship-together/.github/workflows/python-ci.yml@9d6825dd4e0e4d524fca3733f416437bbd7851e1 # v1.31.0
     permissions:
       contents: read
       id-token: write   # only to satisfy the called workflow's declared permissions; no Doppler here
@@ -71,7 +71,7 @@ jobs:
       egress-policy: block
 
   shell:
-    uses: ChiefGyk3D/git-your-ship-together/.github/workflows/bash-ci.yml@7501cb3fa19d83d0e0a131cb040e7c4da32a9504 # v1.28.0
+    uses: ChiefGyk3D/git-your-ship-together/.github/workflows/bash-ci.yml@9d6825dd4e0e4d524fca3733f416437bbd7851e1 # v1.31.0
     permissions:
       contents: read
     with:
@@ -87,7 +87,7 @@ jobs:
   # seconds each on a pull request and 10 minutes each on the weekly schedule. A
   # crash fails the job and the input is uploaded as the fuzz-findings artifact.
   fuzz:
-    uses: ChiefGyk3D/git-your-ship-together/.github/workflows/python-fuzz.yml@7501cb3fa19d83d0e0a131cb040e7c4da32a9504 # v1.28.0
+    uses: ChiefGyk3D/git-your-ship-together/.github/workflows/python-fuzz.yml@9d6825dd4e0e4d524fca3733f416437bbd7851e1 # v1.31.0
     permissions:
       contents: read
     with:
