@@ -68,6 +68,8 @@ not change the exit code.
 | `services start\|stop\|enable\|disable NAME`, a **system**-scope name | **yes** |
 | `radio state` | no |
 | `radio on\|off wwan\|wifi\|bluetooth` | no |
+| `uplink state` | no |
+| `uplink auto`, `uplink cell-first [--for DURATION]` | no (the manager runs as the caller; never pkexec or sudo) |
 | `park NAME[@ADDR] [--until-reboot]`, `wake NAME[@ADDR]` | **yes** |
 | `linger on\|off` | **yes** |
 | `time mode MODE` | **yes** |
@@ -244,6 +246,59 @@ session do it). Fixed argv per radio, nothing else is ever run:
 rfkill is never written. The result is read back with the same reads as
 `radio state`; a mismatch is exit 1 `unverified:`. A radio whose tool is
 absent is exit 2. stdout is empty on success.
+
+### `uplink state`
+
+Argv `uplink state`. No pkexec. stdout, one document:
+
+```json
+{"kind": "uplink", "version": 1, "present": true, "mode": "cell-first",
+ "owner": "cell", "until": "2026-11-24T14:30:00Z", "since": "2026-11-24T12:30:00Z",
+ "detail": ""}
+```
+
+Always these eight keys. The helper reads `quectel-usbnet uplink status --json`
+(the link-priority manager, ChiefGyk3D/quectel-usbnet issue 25) and passes on
+only what it recognizes; the CLI's per-link table is not passed on.
+
+- `mode` is `auto` (Ethernet, then Wi-Fi, then cellular) or `cell-first`
+  (cellular holds the default routes until `until`); `""` when `present` is
+  false.
+- `owner` is the link holding the default routes: `ethernet`, `wifi`, `cell`
+  or `none` (a name this helper does not know reads as `none`); `""` when
+  `present` is false.
+- `until` and `since` are an ISO 8601 stamp with an offset
+  (`YYYY-MM-DDTHH:MM:SS[.ffffff]Z` or `+HH:MM`), or `null`. `until` is `null`
+  for `auto` and for a `cell-first` with no expiry.
+- `present` is false, with `mode` and `owner` `""`, `until` and `since` null
+  and a one-line `detail`, when `quectel-usbnet` is not installed (`detail`
+  is `quectel-usbnet is not installed`), exits non-zero (its first stderr
+  line is in `detail`), or prints a status this helper does not recognize.
+  The exit code is still 0: a front end shows `detail` as "not available"
+  and offers nothing to press. It is the same shape as an absent radio tool.
+- The CLI is found on `PATH`, then in `~/.local/bin`, and run by the absolute
+  path it was found at.
+
+### `uplink auto`, `uplink cell-first [--for DURATION]`
+
+Argv `uplink auto` or `uplink cell-first [--for DURATION]`. No pkexec: run as
+root it exits 2 (the manager is the calling user's own). `DURATION` is `0`
+(no expiry) or a whole number of minutes or hours, `30m` or `2h`, at most four
+digits; anything else is exit 2 with `error:` and nothing is run. With no
+`--for` the helper sends `--for 2h` itself, so its default does not depend on
+the manager's. The words run are fixed:
+
+| mode | command |
+|---|---|
+| `auto` | `quectel-usbnet uplink auto` |
+| `cell-first` | `quectel-usbnet uplink cell-first --for DURATION` |
+
+The status is read first: a CLI that is absent or cannot say its state is exit
+2 (`error: ... not available: ...`) and no switch is run. The result is read
+back with the same read as `uplink state`: a `mode` that does not match, or a
+`cell-first` whose `until` is null exactly when a duration other than `0` was
+asked for, is exit 1 `unverified:`. A CLI that exits non-zero is exit 1 with
+its first stderr line. stdout is empty on success.
 
 ## The three data files
 

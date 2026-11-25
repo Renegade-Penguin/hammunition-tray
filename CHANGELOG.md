@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- **Uplink control** (#51): an emergency "cell first" switch next to the radio switches, in the Plasma applet, the Qt tray and `hammunition-devctl`. The new Controls group has **Auto** (Ethernet, then Wi-Fi, then cellular) and **Cell first**, a duration for Cell first (30 minutes, 1, 2, 4 or 8 hours, or no expiry; 2 hours by default), and an indicator that says where the routes are and when Cell first ends, in local time. Cell first asks first because it uses mobile data; Auto never does. When the CLI is missing or fails the group says so plainly and changes nothing. New helper verbs (contract 1, additive): `uplink state`, `uplink auto`, `uplink cell-first [--for DURATION]`, calling `quectel-usbnet uplink ...` with fixed argv, as the user, never through pkexec or sudo, and reading the result back. Tested against a fake of the CLI contract; the parity test now also runs the applet's and the tray's wording in three time zones.
+
 - Fix: a deeply nested flow mapping in the linger record or a devices/services data file no longer escapes the helper as `RecursionError`; the reader says the file is nested too deeply and treats it as unusable. Found by the weekly fuzz run of `fuzz_linger_record.py` (run 38209891448); `load_yaml` had the same hole.
 
 - README: the helper's prerequisite now says when `hardware apply` writes the helper (only where no contract-1 helper answers), that the catalog units install it, and which device classes the engine catalog marks parkable (#12).

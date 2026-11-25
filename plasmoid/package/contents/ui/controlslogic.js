@@ -4,7 +4,7 @@
  * Copyright (C) 2026 ChiefGyk3D
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * The Controls panel's Services and Radios groups (helper contract v1), with
+ * The Controls panel's Services, Radios and Uplink groups (helper contract v1), with
  * nothing of QML in them. This is qt/hammunition_tray_qt/controls.py
  * restated; the Qt tray runs that one. tests/test_controls_parity.py runs
  * both over the same helper documents and fails on any difference, so every
@@ -32,6 +32,17 @@ var RADIO_NAMES = ["wwan", "wifi", "bluetooth"];
 var ACTIVE = ["active", "inactive", "failed", "activating", "unknown"];
 var ENABLED = ["enabled", "disabled", "static", "not-found", "unknown"];
 var SCOPES = ["user", "system"];
+
+// The uplink modes the helper accepts (`uplink auto|cell-first`), the closed
+// list of durations this applet offers (`--for`; "0" is no expiry) and the one
+// it starts on. controls.py has the same tables.
+var UPLINK_MODES = ["auto", "cell-first"];
+var UPLINK_DURATIONS = [["30m", "30 minutes"], ["1h", "1 hour"], ["2h", "2 hours"],
+                        ["4h", "4 hours"], ["8h", "8 hours"], ["0", "No expiry"]];
+var UPLINK_DEFAULT_DURATION = "2h";
+var UPLINK_OWNERS = ["ethernet", "wifi", "cell", "none"];
+// An ISO 8601 stamp with an offset: the only form both languages read alike.
+var STAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,6})?(?:Z|[+-](\d{2}):(\d{2}))$/;
 
 // The helper's own shape for a name from its allow-list files.
 var NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -64,6 +75,7 @@ function strings(tr) {
         group_devices: tr("Devices"),
         group_services: tr("Services"),
         group_radios: tr("Radios"),
+        group_uplink: tr("Uplink"),
         update: tr("update hammunition-tray"),
         login_label: tr("Start at login"),
         reading_services: tr("Reading services…"),
@@ -74,7 +86,16 @@ function strings(tr) {
         services_parse_error: tr("Could not parse the services list"),
         radios_read_error: tr("Could not read the radios list"),
         radios_parse_error: tr("Could not parse the radios list"),
-        helper_run_error: tr("Could not run the device helper")
+        helper_run_error: tr("Could not run the device helper"),
+        reading_uplink: tr("Reading uplink…"),
+        uplink_read_error: tr("Could not read the uplink state"),
+        uplink_parse_error: tr("Could not parse the uplink state"),
+        uplink_unavailable_no_detail: tr("not available"),
+        uplink_auto_none: tr("Auto: no link has a route"),
+        uplink_cell_no_expiry: tr("Cell first, no expiry"),
+        uplink_duration_heading: tr("Cell first for"),
+        uplink_confirm_yes: tr("Use mobile data"),
+        uplink_confirm_no: tr("Cancel")
     };
 }
 
@@ -139,18 +160,53 @@ function parseRadios(stdout) {
     });
 }
 
+// A real calendar date and clock time with an offset; JavaScript's own parser
+// is more forgiving, so the fields are checked one by one (controls.py's
+// _stamp_ok does the same).
+function stampOk(text) {
+    if (typeof text !== "string") return false;
+    var m = STAMP.exec(text);
+    if (m === null) return false;
+    var year = Number(m[1]), month = Number(m[2]), day = Number(m[3]);
+    var hour = Number(m[4]), minute = Number(m[5]), second = Number(m[6]);
+    var d = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+    d.setUTCFullYear(year);
+    if (d.getUTCFullYear() !== year || d.getUTCMonth() !== month - 1 || d.getUTCDate() !== day
+        || hour > 23 || minute > 59 || second > 59)
+        return false;
+    return (m[7] === undefined || Number(m[7]) <= 23) && (m[8] === undefined || Number(m[8]) <= 59);
+}
+
+// Throws on anything but the document the helper always prints.
+function parseUplink(stdout) {
+    var doc = document_(stdout, "uplink");
+    if (doc.present !== true)
+        return { present: false, mode: "", owner: "", until: null, detail: text(doc, "detail"), switching: false };
+    if (UPLINK_MODES.indexOf(doc.mode) === -1) throw new Error("the uplink has no mode this applet knows");
+    var until = doc.until === undefined ? null : doc.until;
+    if (until !== null && !stampOk(until)) throw new Error("the uplink's expiry is not a stamp");
+    return {
+        present: true,
+        mode: doc.mode,
+        owner: typeof doc.owner === "string" && UPLINK_OWNERS.indexOf(doc.owner) !== -1 ? doc.owner : "none",
+        until: until,
+        detail: text(doc, "detail"),
+        switching: false
+    };
+}
+
 function argparseRefusal(stderr) {
     var low = (stderr || "").toLowerCase();
     return low.indexOf("invalid choice") !== -1 || low.indexOf("usage:") !== -1;
 }
 
 // {doc, unsupported, error, keep}: keep means the last good rows stay on
-// screen, as the device list does after a failed read. kind is "services" or
-// "radios".
+// screen, as the device list does after a failed read. kind is "services",
+// "radios" or "uplink".
 function pollOutcome(kind, code, stdout, stderr, tr) {
     var s = strings(tr);
-    var readError = kind === "services" ? s.services_read_error : s.radios_read_error;
-    var parseError = kind === "services" ? s.services_parse_error : s.radios_parse_error;
+    var readError = s[kind + "_read_error"];
+    var parseError = s[kind + "_parse_error"];
     // Not there: the device poll says so, and the groups hide with it.
     if (code === 127) return { doc: null, unsupported: false, error: "", keep: false };
     // A helper without this verb: argparse refuses it, exit 2, "invalid
@@ -165,7 +221,8 @@ function pollOutcome(kind, code, stdout, stderr, tr) {
     var doc, parsed;
     try {
         var body = (stdout || "").trim();
-        doc = kind === "services" ? parseServices(body) : parseRadios(body);
+        doc = kind === "services" ? parseServices(body)
+            : kind === "radios" ? parseRadios(body) : parseUplink(body);
         parsed = JSON.parse(body);
     } catch (e) {
         return { doc: null, unsupported: false, error: parseError, keep: true };
@@ -238,6 +295,82 @@ function radioEnabled(row, acting) {
     return !acting && row.present && RADIO_NAMES.indexOf(row.name) !== -1;
 }
 
+function uplinkModeLabel(mode, tr) {
+    switch (mode) {
+    case "auto": return tr("Auto");
+    case "cell-first": return tr("Cell first");
+    }
+    return mode;
+}
+
+function uplinkDurationLabel(duration, tr) {
+    switch (duration) {
+    case "30m": return tr("30 minutes");
+    case "1h": return tr("1 hour");
+    case "2h": return tr("2 hours");
+    case "4h": return tr("4 hours");
+    case "8h": return tr("8 hours");
+    case "0": return tr("No expiry");
+    }
+    return duration;
+}
+
+function uplinkChecked(row, mode) {
+    return row.present && row.mode === mode;
+}
+
+function uplinkEnabled(row, acting) {
+    return !acting && row.present;
+}
+
+function uplinkDurationEnabled(row, acting) {
+    return !acting && row.present;
+}
+
+// Cell first uses mobile data and asks first; going back to Auto never does.
+function uplinkNeedsConfirm(mode) {
+    return mode === "cell-first";
+}
+
+function uplinkConfirmText(duration, tr) {
+    var when = duration === "0" ? tr("until you switch back to Auto")
+        : tr("for %1", uplinkDurationLabel(duration, tr));
+    return tr("Cell first uses mobile data %1. Turn it on?", when);
+}
+
+function pad2(n) {
+    return n < 10 ? "0" + n : String(n);
+}
+
+// When cell first ends, in the operator's local time: HH:MM if that is today,
+// else YYYY-MM-DD HH:MM. `now` is epoch seconds.
+function untilText(until, now) {
+    var when = new Date(until);
+    var today = new Date(now * 1000);
+    var clock = pad2(when.getHours()) + ":" + pad2(when.getMinutes());
+    if (when.getFullYear() === today.getFullYear() && when.getMonth() === today.getMonth()
+        && when.getDate() === today.getDate())
+        return clock;
+    return when.getFullYear() + "-" + pad2(when.getMonth() + 1) + "-" + pad2(when.getDate()) + " " + clock;
+}
+
+// The one line that says where the default routes are and, for cell first,
+// when that ends.
+function uplinkIndicator(row, now, tr) {
+    if (!row.present)
+        return row.detail !== "" ? tr("not available: %1", row.detail) : tr("not available");
+    if (row.switching) return tr("Switching to %1…", uplinkModeLabel(row.mode, tr));
+    if (row.mode === "cell-first")
+        return row.until !== null ? tr("Cell first until %1", untilText(row.until, now))
+            : tr("Cell first, no expiry");
+    switch (row.owner) {
+    case "ethernet": return tr("Auto: using %1", tr("Ethernet"));
+    case "wifi": return tr("Auto: using %1", tr("Wi-Fi"));
+    case "cell": return tr("Auto: using %1", tr("cellular"));
+    }
+    return tr("Auto: no link has a route");
+}
+
 function usesPkexec(row) {
     return row.scope === "system";
 }
@@ -256,6 +389,20 @@ function serviceArgv(pkexec, helper, row, verb) {
 function radioArgv(helper, row, on) {
     if (RADIO_NAMES.indexOf(row.name) === -1) throw new Error("refusing radio");
     return [helper, "radio", on ? "on" : "off", row.name];
+}
+
+function uplinkPollArgv(helper) {
+    return [helper, "uplink", "state"];
+}
+
+// The helper directly, never pkexec or sudo. The duration must be one this
+// applet offers, so nothing else reaches the CLI's --for.
+function uplinkArgv(helper, mode, duration) {
+    if (UPLINK_MODES.indexOf(mode) === -1) throw new Error("refusing uplink mode");
+    var known = UPLINK_DURATIONS.some(function (d) { return d[0] === duration; });
+    if (!known) throw new Error("refusing uplink duration");
+    if (mode === "auto") return [helper, "uplink", "auto"];
+    return [helper, "uplink", "cell-first", "--for", duration];
 }
 
 // The one line for a verb run without pkexec that did not succeed, or "".
@@ -293,6 +440,10 @@ function radioPending(name, on) {
     return ["radio:" + name + ":enabled", on];
 }
 
+function uplinkPending(mode) {
+    return ["uplink:mode", mode];
+}
+
 function copy(row) {
     var out = {};
     for (var k in row) out[k] = row[k];
@@ -319,4 +470,16 @@ function effectiveRadios(rows, pending) {
         if (typeof on === "boolean") out.enabled = on;
         return out;
     });
+}
+
+// The row as the operator would see it if their request had worked: the mode
+// they asked for, marked as switching (its expiry is not known yet).
+function effectiveUplink(row, pending) {
+    var want = pending["uplink:mode"];
+    if (!row.present || typeof want !== "string" || want === row.mode) return row;
+    var out = copy(row);
+    out.mode = want;
+    out.until = null;
+    out.switching = true;
+    return out;
 }

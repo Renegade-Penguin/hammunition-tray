@@ -20,6 +20,7 @@ from controls_fixtures import (  # noqa: E402
     RADIOS_POLLS,
     SERVICES,
     SERVICES_POLLS,
+    UPLINKS,
     doc_with,
     radios_doc,
     svc,
@@ -655,20 +656,22 @@ class Menu(unittest.TestCase):
     def kinds(self, state):
         return [(e.kind, e.text) for e in logic.menu_model(state) if e.kind == "heading"]
 
-    def test_one_controls_panel_three_groups_then_time(self):
+    def test_one_controls_panel_four_groups_then_time(self):
         s = with_radios("d2", with_services("d2"))
         self.assertEqual(
             self.kinds(s),
             [("heading", "Controls"), ("heading", "Devices"), ("heading", "Services"),
-             ("heading", "Radios"), ("heading", "Time")],
+             ("heading", "Radios"), ("heading", "Uplink"), ("heading", "Time")],
         )
 
     def test_the_groups_come_in_order(self):
         s = with_radios("d2", with_services("d2", TrayState(devices=(logic.Device("gnss-ublox", "1-4", "u-blox", False, False, True),))))
+        s = logic.apply_uplink_poll(s, ok(json.dumps(UPLINKS["auto-wifi"])))
         order = [e.kind for e in logic.menu_model(s)]
         self.assertLess(order.index("toggle"), order.index("service-run"))
         self.assertLess(order.index("service-run"), order.index("radio"))
-        self.assertLess(order.index("radio"), order.index("time"))
+        self.assertLess(order.index("radio"), order.index("uplink-mode"))
+        self.assertLess(order.index("uplink-mode"), order.index("time"))
         self.assertEqual(order[-1], "quit")
 
     def test_devices_are_unchanged(self):

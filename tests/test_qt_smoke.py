@@ -32,7 +32,7 @@ HELPER = "/usr/local/libexec/hammunition-devctl"
 PKEXEC = "/usr/bin/pkexec"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from controls_fixtures import RADIOS, RADIOS_POLLS, SERVICES, SERVICES_POLLS  # noqa: E402
+from controls_fixtures import RADIOS, RADIOS_POLLS, SERVICES, SERVICES_POLLS, UPLINK_POLLS, UPLINKS  # noqa: E402
 from time_fixtures import POLLS, STATES  # noqa: E402
 
 
@@ -95,6 +95,7 @@ class FakeRunner:
             "time state": TIME_OK,
             "services state": _doc_ok(SERVICES["empty"]),
             "radio state": _doc_ok(RADIOS["empty"]),
+            "uplink state": _doc_ok(UPLINKS["auto-wifi"]),
         }
         default = defaults.get(key, ProcResult(started=True, stdout="[]"))
         done(self.answers.get(key, default))
@@ -139,7 +140,7 @@ class Smoke(unittest.TestCase):
         self.assertIn("1 device parked", tray.icon.toolTip())
         self.assertFalse(tray.icon.icon().isNull())
 
-    def test_one_tick_asks_for_all_four_documents_with_no_pkexec(self):
+    def test_one_tick_asks_for_all_five_documents_with_no_pkexec(self):
         tray, runner = self.make([row()])
         tray.refresh()
         self.assertEqual(
@@ -149,6 +150,7 @@ class Smoke(unittest.TestCase):
                 (HELPER, ["state"]),
                 (HELPER, ["services", "state"]),
                 (HELPER, ["radio", "state"]),
+                (HELPER, ["uplink", "state"]),
             ],
         )
 
@@ -234,7 +236,7 @@ class Smoke(unittest.TestCase):
         tray.refresh()
         self.assertIn((HELPER, ["time", "state"]), runner.calls)
         sections = [a.text() for a in tray.menu.actions() if a.isSeparator() and a.text()]
-        self.assertEqual(sections, ["Controls", "Devices", "Services", "Radios", "Time"])
+        self.assertEqual(sections, ["Controls", "Devices", "Services", "Radios", "Uplink", "Time"])
         self.assertIn("The clock follows the GPS (offset +3.3 ms)", self.texts(tray))
         modes = self.modes(tray)
         self.assertEqual(len(modes), 4)
@@ -459,6 +461,126 @@ class Smoke(unittest.TestCase):
         a = self.action(tray, "Bluetooth")
         self.assertEqual(a.text(), "Bluetooth — not available: bluetoothctl is not installed")
         self.assertFalse(a.isEnabled())
+
+    # -- the Uplink control (helper contract v1, `uplink`) -------------------
+
+    def uplink_tray(self, doc="auto-wifi", confirm=True):
+        tray, runner = self.make([row()])
+        runner.answers["uplink state"] = _doc_ok(UPLINKS[doc])
+        asked = []
+
+        def confirm_fn(text):
+            asked.append(text)
+            return confirm
+
+        tray.confirm = confirm_fn
+        tray.asked = asked
+        tray.refresh()
+        del runner.calls[:]
+        return tray, runner
+
+    def exact(self, tray, text):
+        [a] = [a for a in tray.menu.actions() if a.text() == text]
+        return a
+
+    def test_the_uplink_group_shows_the_indicator_the_modes_and_the_durations(self):
+        tray, _ = self.uplink_tray()
+        texts = self.texts(tray)
+        self.assertIn("Auto: using Wi-Fi", texts)
+        self.assertTrue(self.exact(tray, "Auto").isChecked())
+        self.assertFalse(self.exact(tray, "Cell first").isChecked())
+        for label in ("30 minutes", "1 hour", "2 hours", "4 hours", "8 hours", "No expiry"):
+            self.assertIn(label, texts)
+        self.assertTrue(self.exact(tray, "2 hours").isChecked())
+        self.assertFalse(self.exact(tray, "No expiry").isChecked())
+
+    def test_cell_first_shows_its_expiry(self):
+        tray, _ = self.uplink_tray("cell-first-no-expiry")
+        self.assertIn("Cell first, no expiry", self.texts(tray))
+        self.assertTrue(self.exact(tray, "Cell first").isChecked())
+
+    def test_cell_first_asks_first_then_runs_the_helper_directly_and_repolls(self):
+        tray, runner = self.uplink_tray()
+        self.exact(tray, "Cell first").trigger()
+        self.assertEqual(tray.asked, ["Cell first uses mobile data for 2 hours. Turn it on?"])
+        self.assertEqual(runner.calls[0], (HELPER, ["uplink", "cell-first", "--for", "2h"]))
+        self.assertIn((HELPER, ["uplink", "state"]), runner.calls[1:])
+        self.assertTrue(all(c[0] == HELPER for c in runner.calls))
+        self.assertFalse(any(w in ("pkexec", "sudo") for c in runner.calls for w in c[1]))
+
+    def test_declining_the_confirmation_runs_nothing_and_changes_nothing(self):
+        tray, runner = self.uplink_tray(confirm=False)
+        self.exact(tray, "Cell first").trigger()
+        self.assertEqual(len(tray.asked), 1)
+        self.assertEqual(runner.calls, [])
+        self.assertEqual(tray.state.pending, ())
+        self.assertTrue(self.exact(tray, "Auto").isChecked())
+        self.assertFalse(self.exact(tray, "Cell first").isChecked())
+
+    def test_returning_to_auto_never_asks(self):
+        tray, runner = self.uplink_tray("cell-first")
+        tray.confirm = lambda text: self.fail("Auto must not ask for confirmation")
+        self.exact(tray, "Auto").trigger()
+        self.assertEqual(runner.calls[0], (HELPER, ["uplink", "auto"]))
+
+    def test_the_current_uplink_mode_asks_for_nothing(self):
+        tray, runner = self.uplink_tray()
+        self.exact(tray, "Auto").trigger()
+        self.assertEqual((runner.calls, tray.asked), ([], []))
+        self.assertTrue(self.exact(tray, "Auto").isChecked())
+
+    def test_a_chosen_duration_runs_nothing_and_goes_on_the_next_cell_first(self):
+        tray, runner = self.uplink_tray()
+        self.exact(tray, "No expiry").trigger()
+        self.assertEqual(runner.calls, [])
+        self.assertTrue(self.exact(tray, "No expiry").isChecked())
+        self.assertFalse(self.exact(tray, "2 hours").isChecked())
+        self.exact(tray, "Cell first").trigger()
+        self.assertEqual(tray.asked, ["Cell first uses mobile data until you switch back to Auto. Turn it on?"])
+        self.assertEqual(runner.calls[0], (HELPER, ["uplink", "cell-first", "--for", "0"]))
+
+    def test_a_failing_switch_shows_the_one_line_and_changes_nothing(self):
+        from hammunition_tray_qt.logic import ProcResult
+
+        tray, runner = self.uplink_tray()
+        runner.answers["uplink cell-first --for 2h"] = ProcResult(
+            started=True, code=1, stderr="error: modem not connected\nmore\n"
+        )
+        self.exact(tray, "Cell first").trigger()
+        self.assertIn("error: modem not connected", self.texts(tray))
+        self.assertEqual(tray.state.pending, ())
+        self.assertTrue(self.exact(tray, "Auto").isChecked())
+
+    def test_a_missing_cli_is_one_plain_line_and_offers_nothing(self):
+        tray, _ = self.uplink_tray("missing")
+        texts = self.texts(tray)
+        self.assertIn("not available: quectel-usbnet is not installed", texts)
+        for label in ("Cell first", "30 minutes", "No expiry"):
+            self.assertNotIn(label, texts)
+
+    def test_a_cli_that_fails_to_read_is_a_plain_error_and_changes_nothing(self):
+        from hammunition_tray_qt.logic import ProcResult
+
+        tray, runner = self.make([row()])
+        runner.answers["uplink state"] = ProcResult(started=True, code=1, stderr="error: boom\n")
+        tray.refresh()
+        self.assertIn("error: boom", self.texts(tray))
+        self.assertNotIn("Cell first", self.texts(tray))
+
+    def test_a_helper_without_the_verb_says_update(self):
+        tray, runner = self.make([row()])
+        runner.answers["uplink state"] = _poll(UPLINK_POLLS["old-helper"])
+        tray.refresh()
+        self.assertEqual(self.texts(tray).count("update hammunition-tray"), 1)
+
+    def test_the_default_confirmation_is_a_dialog_that_defaults_to_cancel(self):
+        import inspect
+
+        from hammunition_tray_qt import tray as tray_module
+
+        src = inspect.getsource(tray_module.Tray._ask_confirm)
+        self.assertIn("setDefaultButton", src)
+        self.assertIn("UPLINK_CONFIRM_NO", src)
 
     def test_helper_missing_hides_the_groups(self):
         from hammunition_tray_qt.logic import ProcResult

@@ -9,8 +9,8 @@ interface. In short:
 
 * ``park NAME``, ``wake NAME``, ``linger on|off``, ``time mode MODE`` and the
   system-scope ``services`` verbs go through pkexec and one polkit action.
-* ``state``, ``time state``, ``services state``, ``radio state`` and the
-  user-scope ``services`` and ``radio`` verbs never need root.
+* ``state``, ``time state``, ``services state``, ``radio state``, ``uplink state``
+  and the user-scope ``services``, ``radio`` and ``uplink`` verbs never need root.
 
 **It takes a name and derives everything else itself.** It re-reads the USB
 bus and the device list in this process and computes the paths it writes; an
@@ -37,7 +37,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from hammunition_devctl import CONTRACT, radio, services
+from hammunition_devctl import CONTRACT, radio, services, uplink
 from hammunition_devctl.bus import match_devices, read_usb_bus
 from hammunition_devctl.devices import Source, load_devices
 from hammunition_devctl.engine import engine_importable_as_root
@@ -436,6 +436,28 @@ def _radio_switch(state: str, name: str) -> int:
     return code
 
 
+def _uplink_state() -> int:
+    print(json.dumps(uplink.read_uplink()))
+    return EXIT_OK
+
+
+def _uplink_switch(mode: str, duration: str | None) -> int:
+    if os.geteuid() == 0:
+        print(
+            "error: the uplink switch is your own session's; run this without pkexec",
+            file=sys.stderr,
+        )
+        return EXIT_UNPLANNABLE
+    wanted = duration if duration is not None else uplink.DEFAULT_DURATION
+    if not uplink.valid_duration(wanted):
+        print(f"error: {wanted!r} is not a duration (0, or minutes or hours: 30m, 2h)", file=sys.stderr)
+        return EXIT_UNPLANNABLE
+    code, problems = uplink.switch(mode, wanted)
+    for problem in problems:
+        print(f"{'error' if code == EXIT_UNPLANNABLE else 'unverified'}: {problem}", file=sys.stderr)
+    return code
+
+
 def _runtime_writability_findings() -> tuple[WritabilityFinding | None, WritabilityFinding | None]:
     """The same D-056 check ``hardware apply`` runs before install, run again
     here, at the moment this process is actually about to act as root.
@@ -564,6 +586,18 @@ def main(argv: list[str] | None = None) -> int:
     for state_name in ("on", "off"):
         p_rad = radio_sub.add_parser(state_name, help=f"turn a radio {state_name}")
         p_rad.add_argument("name", choices=radio.NAMES)
+    p_uplink = sub.add_parser("uplink", help="which link owns the default routes: state, auto, cell-first")
+    uplink_sub = p_uplink.add_subparsers(dest="uplink_verb", required=True)
+    uplink_sub.add_parser("state", help="JSON: the mode, the owner and when cell-first ends")
+    uplink_sub.add_parser("auto", help="Ethernet, then Wi-Fi, then cellular")
+    p_cell = uplink_sub.add_parser("cell-first", help="cellular first, until it expires")
+    p_cell.add_argument(
+        "--for",
+        dest="duration",
+        metavar="DURATION",
+        default=None,
+        help="30m, 2h and so on; 0 for no expiry (default 2h)",
+    )
     p_linger = sub.add_parser(
         "linger", help="keep your user services running after you log out (D-073 §5a)"
     )
@@ -591,6 +625,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.radio_verb == "state":
             return _radio_state()
         return _radio_switch(args.radio_verb, args.name)
+    if args.verb == "uplink":
+        if args.uplink_verb == "state":
+            return _uplink_state()
+        return _uplink_switch(args.uplink_verb, getattr(args, "duration", None))
     if args.verb == "linger":
         return _linger(args.state == "on")
     verb: str = args.verb

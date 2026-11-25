@@ -14,10 +14,11 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from dataclasses import dataclass, replace
 
 from . import controls, timelogic
-from .controls import RadioRow, ServiceRow, ServicesDoc
+from .controls import RadioRow, ServiceRow, ServicesDoc, UplinkRow
 from .timelogic import TimeState
 
 # The wrapper `hammunition hardware apply` installs. The polkit action
@@ -112,6 +113,13 @@ class TrayState:
     radios: tuple[RadioRow, ...] | None = None
     radios_unsupported: bool = False
     radios_error: str = ""
+    # The Uplink control (`uplink state`): same three fields, same reasons.
+    # `uplink_duration` is how long the next Cell first lasts; it is the
+    # operator's choice, "2h" until they change it, and is not the helper's.
+    uplink: UplinkRow | None = None
+    uplink_unsupported: bool = False
+    uplink_error: str = ""
+    uplink_duration: str = controls.UPLINK_DEFAULT_DURATION
     # What the operator just asked for and no poll has confirmed: shown at
     # once, replaced by the next poll, dropped if the verb fails.
     # (key, value) pairs; see controls.service_pending.
@@ -129,7 +137,8 @@ class TrayState:
 @dataclass(frozen=True)
 class MenuEntry:
     # info | toggle | forget | heading | time | note | mode | error | footer
-    # | separator | quit | service-run | service-login | radio
+    # | separator | quit | service-run | service-login | radio | uplink-mode
+    # | uplink-duration
     kind: str
     text: str = ""
     enabled: bool = False
@@ -142,6 +151,9 @@ class MenuEntry:
     # The verb is start|stop|enable|disable or on|off.
     service: ServiceRow | None = None
     radio: RadioRow | None = None
+    # For "uplink-mode", `verb` is auto|cell-first and `duration` the one a
+    # Cell first would use; for "uplink-duration", the duration it sets.
+    duration: str | None = None
 
 
 def parse_state(stdout: str) -> tuple[Device, ...]:
@@ -212,9 +224,23 @@ def radios_poll_argv() -> tuple[str, list[str]]:
     return controls.radios_poll_argv(HELPER)
 
 
+def uplink_poll_argv() -> tuple[str, list[str]]:
+    return controls.uplink_poll_argv(HELPER)
+
+
+def set_uplink_duration(state: TrayState, duration: str) -> TrayState:
+    """The operator chose how long the next Cell first lasts. Nothing runs."""
+    if duration not in dict(controls.UPLINK_DURATIONS):
+        raise ValueError(f"refusing uplink duration {duration!r}")
+    return replace(state, uplink_duration=duration)
+
+
 def control_argv(entry: "MenuEntry") -> tuple[str, list[str]]:
-    """The argv for a service or radio entry: the helper directly for a
-    user-scope service and a radio, pkexec for a system-scope service."""
+    """The argv for a service, radio or uplink entry: the helper directly for
+    a user-scope service, a radio and the uplink, pkexec for a system-scope
+    service."""
+    if entry.kind == "uplink-mode" and entry.verb is not None and entry.duration is not None:
+        return controls.uplink_argv(HELPER, entry.verb, entry.duration)
     if entry.service is not None and entry.verb is not None:
         return controls.service_argv(PKEXEC, HELPER, entry.service, entry.verb)
     if entry.radio is not None and entry.verb in ("on", "off"):
@@ -245,10 +271,19 @@ def apply_radios_poll(
     return _apply_group(state, out, "radio:", epoch)
 
 
+def apply_uplink_poll(
+    state: TrayState, result: ProcResult, epoch: int | None = None
+) -> TrayState:
+    out = controls.poll_outcome(
+        "uplink", result.started, result.crashed, result.code, result.stdout, result.stderr
+    )
+    return _apply_group(state, out, "uplink:", epoch)
+
+
 def _apply_group(
     state: TrayState, out: controls.GroupOutcome, prefix: str, epoch: int | None
 ) -> TrayState:
-    kind = "services" if prefix == "service:" else "radios"
+    kind = {"service:": "services", "radio:": "radios", "uplink:": "uplink"}[prefix]
     err = f"{kind}_error"
     unsupported = f"{kind}_unsupported"
     # A poll that was running before a verb began, or lands while one runs,
@@ -274,6 +309,8 @@ def begin_control(state: TrayState, entry: "MenuEntry") -> TrayState:
     """A service or radio switch was used: show what it asks for at once."""
     if entry.service is not None and entry.verb is not None:
         key, value = controls.service_pending(entry.verb, entry.service.name)
+    elif entry.kind == "uplink-mode" and entry.verb is not None:
+        key, value = controls.uplink_pending(entry.verb)
     elif entry.radio is not None and entry.verb in ("on", "off"):
         key, value = controls.radio_pending(entry.radio.name, entry.verb == "on")
     else:
@@ -532,6 +569,46 @@ def _services_entries(state: TrayState) -> list[MenuEntry]:
     return entries
 
 
+def _uplink_entries(state: TrayState, now: float) -> list[MenuEntry]:
+    """The Uplink group: where the default routes are (and when Cell first
+    ends), the two modes, and how long the next Cell first lasts."""
+    entries = [MenuEntry("separator"), MenuEntry("heading", controls.GROUP_UPLINK)]
+    if state.uplink_unsupported:
+        return entries + [_group_line(controls.UPDATE)]
+    if state.uplink is None:
+        if not state.uplink_error:
+            entries.append(_group_line(controls.READING_UPLINK))
+    else:
+        row = controls.effective_uplink(state.uplink, state.pending)
+        entries.append(_group_line(controls.uplink_indicator(row, now)))
+        if row.present:
+            for mode in controls.UPLINK_MODES:
+                entries.append(
+                    MenuEntry(
+                        kind="uplink-mode",
+                        text=controls.uplink_mode_label(mode),
+                        enabled=controls.uplink_enabled(row, state.acting),
+                        checked=controls.uplink_checked(row, mode),
+                        verb=mode,
+                        duration=state.uplink_duration,
+                    )
+                )
+            entries.append(MenuEntry("note", controls.UPLINK_DURATION_HEADING))
+            for value, label in controls.UPLINK_DURATIONS:
+                entries.append(
+                    MenuEntry(
+                        kind="uplink-duration",
+                        text=label,
+                        enabled=controls.uplink_duration_enabled(row, state.acting),
+                        checked=state.uplink_duration == value,
+                        duration=value,
+                    )
+                )
+    if state.uplink_error:
+        entries.append(MenuEntry("error", state.uplink_error))
+    return entries
+
+
 def _radios_entries(state: TrayState) -> list[MenuEntry]:
     entries = [MenuEntry("separator"), MenuEntry("heading", controls.GROUP_RADIOS)]
     if state.radios_unsupported:
@@ -560,7 +637,8 @@ def _radios_entries(state: TrayState) -> list[MenuEntry]:
     return entries
 
 
-def menu_model(state: TrayState) -> list[MenuEntry]:
+def menu_model(state: TrayState, now: float | None = None) -> list[MenuEntry]:
+    """``now`` is epoch seconds, for the Uplink expiry; the wall clock if None."""
     entries: list[MenuEntry] = [
         MenuEntry("heading", controls.HEADING),
         MenuEntry("heading", controls.GROUP_DEVICES),
@@ -594,6 +672,7 @@ def menu_model(state: TrayState) -> list[MenuEntry]:
         # After the footer, which is about the devices above it.
         entries += _services_entries(state)
         entries += _radios_entries(state)
+        entries += _uplink_entries(state, time.time() if now is None else now)
         entries += _time_entries(state)
     # The action's error last: it may be a park, a wake or a time mode.
     for error in (state.time_error, state.action_error):

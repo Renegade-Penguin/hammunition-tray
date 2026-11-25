@@ -15,7 +15,7 @@ PlasmaExtras.Representation {
     id: full
 
     Layout.minimumWidth: Kirigami.Units.gridUnit * 20
-    // Taller since the Controls panel: three groups and the Time section
+    // Taller since the Controls panel: four groups and the Time section
     // under one another. What does not fit scrolls.
     Layout.minimumHeight: Kirigami.Units.gridUnit * 28
 
@@ -345,6 +345,122 @@ PlasmaExtras.Representation {
                 wrapMode: Text.WordWrap
                 color: Kirigami.Theme.negativeTextColor
                 text: root.radiosError
+            }
+
+            // The Uplink group: which link owns the default routes. Auto is
+            // Ethernet, then Wi-Fi, then cellular; Cell first puts cellular on
+            // top for an emergency or a diagnosis, until it expires. Cell first
+            // uses mobile data, so it asks first (an inline question, not a
+            // dialog: a dialog can close the popup under it). Always direct,
+            // never pkexec or sudo. controlslogic.js has every rule and sentence.
+            Kirigami.Separator {
+                Layout.fillWidth: true
+                visible: !root.helperMissing
+            }
+
+            PlasmaExtras.Heading {
+                Layout.fillWidth: true
+                visible: !root.helperMissing
+                level: 5
+                text: root.controlStrings.group_uplink
+            }
+
+            PlasmaComponents.Label {
+                Layout.fillWidth: true
+                visible: !root.helperMissing && root.uplinkUnsupported
+                wrapMode: Text.WordWrap
+                opacity: 0.7
+                text: root.controlStrings.update
+            }
+
+            PlasmaComponents.Label {
+                Layout.fillWidth: true
+                visible: !root.helperMissing && !root.uplinkUnsupported && root.effectiveUplink === null && root.uplinkError === ""
+                opacity: 0.7
+                text: root.controlStrings.reading_uplink
+            }
+
+            // Where the routes are, and when Cell first ends; or why the
+            // control is not available, plainly, with nothing to press.
+            PlasmaComponents.Label {
+                Layout.fillWidth: true
+                visible: !root.helperMissing && !root.uplinkUnsupported && root.effectiveUplink !== null
+                wrapMode: Text.WordWrap
+                text: root.effectiveUplink === null ? "" : Controls.uplinkIndicator(root.effectiveUplink, Date.now() / 1000, root.tr)
+            }
+
+            Repeater {
+                model: (root.helperMissing || root.uplinkUnsupported || root.effectiveUplink === null || !root.effectiveUplink.present) ? [] : Controls.UPLINK_MODES
+                delegate: PlasmaComponents.RadioButton {
+                    Layout.fillWidth: true
+                    text: Controls.uplinkModeLabel(modelData, root.tr)
+                    enabled: root.effectiveUplink !== null && Controls.uplinkEnabled(root.effectiveUplink, root.acting)
+                    // Bound to the row as drawn and rebound on toggle, so a
+                    // declined question leaves the truth checked.
+                    checked: root.effectiveUplink !== null && Controls.uplinkChecked(root.effectiveUplink, modelData)
+                    onToggled: {
+                        const wanted = modelData;
+                        checked = Qt.binding(() => root.effectiveUplink !== null && Controls.uplinkChecked(root.effectiveUplink, modelData));
+                        root.setUplink(wanted);
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                visible: !root.helperMissing && !root.uplinkUnsupported && root.effectiveUplink !== null && root.effectiveUplink.present
+                spacing: Kirigami.Units.smallSpacing
+
+                PlasmaComponents.Label {
+                    Layout.fillWidth: true
+                    text: root.controlStrings.uplink_duration_heading
+                }
+
+                PlasmaComponents.ComboBox {
+                    id: durationChoice
+                    enabled: root.effectiveUplink !== null && Controls.uplinkDurationEnabled(root.effectiveUplink, root.acting)
+                    model: Controls.UPLINK_DURATIONS.map(d => Controls.uplinkDurationLabel(d[0], root.tr))
+                    currentIndex: Controls.UPLINK_DURATIONS.findIndex(d => d[0] === root.uplinkDuration)
+                    onActivated: index => {
+                        root.setUplinkDuration(Controls.UPLINK_DURATIONS[index][0]);
+                        currentIndex = Qt.binding(() => Controls.UPLINK_DURATIONS.findIndex(d => d[0] === root.uplinkDuration));
+                    }
+                }
+            }
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                visible: !root.helperMissing && root.uplinkConfirming !== ""
+                spacing: Kirigami.Units.smallSpacing
+
+                PlasmaComponents.Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    text: Controls.uplinkConfirmText(root.uplinkDuration, root.tr)
+                }
+
+                RowLayout {
+                    spacing: Kirigami.Units.smallSpacing
+
+                    PlasmaComponents.Button {
+                        text: root.controlStrings.uplink_confirm_yes
+                        enabled: !root.acting
+                        onClicked: root.confirmUplink()
+                    }
+
+                    PlasmaComponents.Button {
+                        text: root.controlStrings.uplink_confirm_no
+                        onClicked: root.cancelUplink()
+                    }
+                }
+            }
+
+            PlasmaComponents.Label {
+                Layout.fillWidth: true
+                visible: !root.helperMissing && root.uplinkError !== ""
+                wrapMode: Text.WordWrap
+                color: Kirigami.Theme.negativeTextColor
+                text: root.uplinkError
             }
 
             // The Time section (Hammunition D-058): what the clock follows, and

@@ -372,6 +372,15 @@ class Time(unittest.TestCase):
         self.assertIn("TimeLogic.rtcNote(timeState, root.tr)", tip)
 
 
+def Controls_js_uplink():
+    js = read(os.path.join(UI, "controlslogic.js"))
+    out = ""
+    for name in ("uplinkPollArgv", "uplinkArgv"):
+        start = js.index(f"function {name}(")
+        out += js[start : js.index("\n}\n", start)]
+    return out
+
+
 class Controls(unittest.TestCase):
     """The Controls panel (helper contract v1). The same two guarantees as
     the switches: reading never prompts, and a system-scope change always
@@ -389,9 +398,9 @@ class Controls(unittest.TestCase):
         self.assertIsNotNone(found, "refresh() is gone or was renamed")
         return found.group(1)
 
-    def test_one_tick_asks_for_all_four_documents_and_never_through_pkexec(self):
+    def test_one_tick_asks_for_all_five_documents_and_never_through_pkexec(self):
         body = self.refresh()
-        for verb in (" state", " time state", " services state", " radio state"):
+        for verb in (" state", " time state", " services state", " radio state", " uplink state"):
             self.assertIn(f'helper + "{verb}"', body)
         self.assertNotIn("pkexec", body)
 
@@ -420,7 +429,7 @@ class Controls(unittest.TestCase):
         main = self.main()
         for name in ("servicesError", "radiosError", "servicesUnsupported", "radiosUnsupported"):
             self.assertIn("property", main[main.index(name) - 30 : main.index(name)])
-        branch = main[main.index('if (kind === "services" || kind === "radios")') : main.index('if (kind === "control")')]
+        branch = main[main.index('if (kind === "services" || kind === "radios" || kind === "uplink")') : main.index('if (kind === "control")')]
         self.assertNotIn("lastError", branch)
         self.assertNotIn("actionError", branch)
         self.assertNotIn("timeError", branch)
@@ -437,7 +446,7 @@ class Controls(unittest.TestCase):
 
     def test_a_poll_only_drops_the_request_when_it_started_after_the_last_verb_ended(self):
         main = self.main()
-        branch = main[main.index('if (kind === "services" || kind === "radios")') : main.index('if (kind === "control")')]
+        branch = main[main.index('if (kind === "services" || kind === "radios" || kind === "uplink")') : main.index('if (kind === "control")')]
         self.assertIn("Controls.pendingFresh(started, epoch, acting)", branch)
         # The decision comes before either early return, so a failed poll
         # and a missing helper are covered too.
@@ -536,8 +545,68 @@ class Controls(unittest.TestCase):
         self.assertIn("enabled: Controls.runEnabled(modelData, root.acting)", full)
         self.assertIn("enabled: Controls.loginEnabled(modelData, root.acting)", full)
 
+    def uplink_fn(self, name):
+        found = re.search(rf"function {name}\([^)]*\)\s*\{{(.*?)\n    \}}", self.main(), re.S)
+        self.assertIsNotNone(found, f"{name}() is gone or was renamed")
+        return found.group(1)
+
+    def test_the_uplink_never_goes_through_pkexec_or_sudo(self):
+        for fn in ("setUplink", "confirmUplink", "cancelUplink", "runUplink", "setUplinkDuration"):
+            body = self.uplink_fn(fn)
+            self.assertNotIn("pkexec", body, fn)
+            self.assertNotIn("sudo", body, fn)
+        self.assertIn("Controls.uplinkArgv(helper, mode, uplinkDuration)", self.uplink_fn("runUplink"))
+        self.assertNotIn("pkexec", Controls_js_uplink())
+        self.assertNotIn("sudo", Controls_js_uplink())
+
+    def test_cell_first_asks_before_anything_runs_and_auto_never_does(self):
+        body = self.uplink_fn("setUplink")
+        self.assertIn("Controls.uplinkNeedsConfirm(mode)", body)
+        ask = body[body.index("Controls.uplinkNeedsConfirm(mode)") :]
+        self.assertLess(ask.index("uplinkConfirming = mode"), ask.index("return;"))
+        self.assertLess(ask.index("return;"), ask.index("runUplink(mode)"))
+        # Nothing but the question's yes reaches runUplink for Cell first.
+        self.assertIn("runUplink(mode)", self.uplink_fn("confirmUplink"))
+        self.assertNotIn("runUplink", self.uplink_fn("cancelUplink"))
+        self.assertNotIn("exec.run", body)
+
+    def test_the_uplink_goes_through_the_same_checked_runner_as_a_radio(self):
+        self.assertIn("runControl(words, Controls.uplinkPending(mode))", self.uplink_fn("runUplink"))
+        self.assertIn("catch", self.uplink_fn("runUplink"))
+        self.assertNotIn("exec.run", self.uplink_fn("runUplink"))
+
+    def test_the_uplink_rows_drawn_are_the_pending_overlay(self):
+        main, full = self.main(), self.full()
+        self.assertIn("Controls.effectiveUplink(uplinkRow, pending)", main)
+        self.assertIn("root.effectiveUplink", full)
+        self.assertNotIn("root.uplinkRow", full)
+        self.assertIn("property var effectiveUplinkCache: null", main)
+        self.assertRegex(main, r"if\s*\(!Controls\.sameRows\(uplinkRow, out\.doc\)\)\s*uplinkRow\s*=\s*out\.doc\s*;")
+
+    def test_the_duration_defaults_from_the_shared_library(self):
+        self.assertIn("property string uplinkDuration: Controls.UPLINK_DEFAULT_DURATION", self.main())
+        self.assertIn("Controls.UPLINK_DURATIONS", self.full())
+
+    def test_the_uplink_group_sits_between_the_radios_and_time(self):
+        full = self.full()
+        self.assertLess(full.index("group_radios"), full.index("group_uplink"))
+        self.assertLess(full.index("group_uplink"), full.index('i18n("Time")'))
+        self.assertIn("Controls.uplinkIndicator(root.effectiveUplink, Date.now() / 1000, root.tr)", full)
+        self.assertIn("root.confirmUplink()", full)
+        self.assertIn("root.cancelUplink()", full)
+        self.assertIn("root.setUplink(wanted)", full)
+        self.assertIn("root.controlStrings.reading_uplink", full)
+        self.assertIn("enabled: root.effectiveUplink !== null && Controls.uplinkEnabled(root.effectiveUplink, root.acting)", full)
+
+    def test_a_declined_question_leaves_the_truth_checked(self):
+        self.assertIn(
+            "checked = Qt.binding(() => root.effectiveUplink !== null && Controls.uplinkChecked(root.effectiveUplink, modelData))",
+            self.full(),
+        )
+
     def test_a_helper_without_the_verb_is_one_line_per_group(self):
         full = self.full()
-        self.assertEqual(full.count("text: root.controlStrings.update"), 2)
+        self.assertEqual(full.count("text: root.controlStrings.update"), 3)
         self.assertIn("root.servicesUnsupported", full)
         self.assertIn("root.radiosUnsupported", full)
+        self.assertIn("root.uplinkUnsupported", full)

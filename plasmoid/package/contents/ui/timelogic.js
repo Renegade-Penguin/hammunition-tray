@@ -20,7 +20,7 @@ var ENGINE_FLOOR = "0.18.0";
 
 // Which of the applet's commands a finished source was. The order matters:
 // a control verb first (its name is free), then " services state", " radio
-// state" and " time state" before " state", which they all end in: the other
+// state", " uplink state" and " time state" before " state", which they all end in: the other
 // way round, any of them would be parsed as the device list. A command through pkexec is an action
 // (park, wake, a time mode or a system service verb), never a poll. A user
 // service verb or a radio verb runs the helper directly and is "control".
@@ -33,9 +33,11 @@ function sourceKind(source) {
     // A user-scope service verb or a radio verb, before any " state" test: a
     // service named "state" ends in " state".
     if (/ services (start|stop|enable|disable) \S+$/.test(source)
-        || / radio (on|off) \S+$/.test(source)) return "control";
+        || / radio (on|off) \S+$/.test(source)
+        || / uplink (auto|cell-first( --for \S+)?)$/.test(source)) return "control";
     if (/ services state$/.test(source)) return "services";
     if (/ radio state$/.test(source)) return "radios";
+    if (/ uplink state$/.test(source)) return "uplink";
     if (/ time state$/.test(source)) return "time";
     if (/ state$/.test(source)) return "devices";
     return "action";

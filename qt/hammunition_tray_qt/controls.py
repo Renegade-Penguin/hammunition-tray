@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, replace
+from datetime import datetime
 
 # The helper contract version this tray speaks (docs/contract.md in the
 # helper's branch). A document that says less than this is "update
@@ -33,6 +34,7 @@ HEADING = "Controls"
 GROUP_DEVICES = "Devices"
 GROUP_SERVICES = "Services"
 GROUP_RADIOS = "Radios"
+GROUP_UPLINK = "Uplink"
 # What a group says when the installed helper has no such verb, or speaks an
 # older contract. One line, not an error on every poll.
 UPDATE = "update hammunition-tray"
@@ -51,6 +53,20 @@ SERVICE_FAILED = "%s: failed"
 SERVICE_STARTING = "%s: starting"
 RADIO_UNAVAILABLE = "not available: %s"
 RADIO_UNAVAILABLE_NO_TOOL = "not available"
+READING_UPLINK = "Reading uplink…"
+UPLINK_READ_ERROR = "Could not read the uplink state"
+UPLINK_PARSE_ERROR = "Could not parse the uplink state"
+UPLINK_UNAVAILABLE = "not available: %s"
+UPLINK_UNAVAILABLE_NO_DETAIL = "not available"
+UPLINK_AUTO_OWNER = "Auto: using %s"
+UPLINK_AUTO_NONE = "Auto: no link has a route"
+UPLINK_CELL_UNTIL = "Cell first until %s"
+UPLINK_CELL_NO_EXPIRY = "Cell first, no expiry"
+UPLINK_SWITCHING = "Switching to %s…"
+UPLINK_DURATION_HEADING = "Cell first for"
+UPLINK_CONFIRM = "Cell first uses mobile data %s. Turn it on?"
+UPLINK_CONFIRM_YES = "Use mobile data"
+UPLINK_CONFIRM_NO = "Cancel"
 
 # Every fixed sentence, by name, so the parity test can compare them all.
 STRINGS: dict[str, str] = {
@@ -58,6 +74,7 @@ STRINGS: dict[str, str] = {
     "group_devices": GROUP_DEVICES,
     "group_services": GROUP_SERVICES,
     "group_radios": GROUP_RADIOS,
+    "group_uplink": GROUP_UPLINK,
     "update": UPDATE,
     "login_label": LOGIN_LABEL,
     "reading_services": READING_SERVICES,
@@ -69,6 +86,15 @@ STRINGS: dict[str, str] = {
     "radios_read_error": RADIOS_READ_ERROR,
     "radios_parse_error": RADIOS_PARSE_ERROR,
     "helper_run_error": HELPER_RUN_ERROR,
+    "reading_uplink": READING_UPLINK,
+    "uplink_read_error": UPLINK_READ_ERROR,
+    "uplink_parse_error": UPLINK_PARSE_ERROR,
+    "uplink_unavailable_no_detail": UPLINK_UNAVAILABLE_NO_DETAIL,
+    "uplink_auto_none": UPLINK_AUTO_NONE,
+    "uplink_cell_no_expiry": UPLINK_CELL_NO_EXPIRY,
+    "uplink_duration_heading": UPLINK_DURATION_HEADING,
+    "uplink_confirm_yes": UPLINK_CONFIRM_YES,
+    "uplink_confirm_no": UPLINK_CONFIRM_NO,
 }
 
 SERVICE_VERBS = ("start", "stop", "enable", "disable")
@@ -79,6 +105,28 @@ RADIO_LABELS = {
     "wifi": "Wi-Fi",
     "bluetooth": "Bluetooth",
 }
+
+# The uplink modes the helper accepts (`uplink auto|cell-first`), the closed
+# list of durations this tray offers (`--for`; "0" is no expiry), and the one
+# it starts on.
+UPLINK_MODES = ("auto", "cell-first")
+UPLINK_MODE_LABELS = {"auto": "Auto", "cell-first": "Cell first"}
+UPLINK_DURATIONS = (
+    ("30m", "30 minutes"),
+    ("1h", "1 hour"),
+    ("2h", "2 hours"),
+    ("4h", "4 hours"),
+    ("8h", "8 hours"),
+    ("0", "No expiry"),
+)
+UPLINK_DEFAULT_DURATION = "2h"
+_UPLINK_OWNERS = ("ethernet", "wifi", "cell", "none")
+_UPLINK_OWNER_LABELS = {"ethernet": "Ethernet", "wifi": "Wi-Fi", "cell": "cellular"}
+# An ISO 8601 stamp with an offset: the only form both languages read alike.
+_STAMP = re.compile(
+    r"([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.[0-9]{1,6})?"
+    r"(?:Z|[+-]([0-9]{2}):([0-9]{2}))"
+)
 
 _ACTIVE = ("active", "inactive", "failed", "activating", "unknown")
 _ENABLED = ("enabled", "disabled", "static", "not-found", "unknown")
@@ -115,6 +163,20 @@ class RadioRow:
     enabled: bool
     method: str
     detail: str
+
+
+@dataclass(frozen=True)
+class UplinkRow:
+    """``uplink state``. ``switching`` is only ever true on a row from
+    :func:`effective_uplink`: the operator asked for ``mode`` and no poll has
+    confirmed it."""
+
+    present: bool
+    mode: str
+    owner: str
+    until: str | None
+    detail: str
+    switching: bool = False
 
 
 # -- parsing ---------------------------------------------------------------
@@ -203,13 +265,50 @@ def parse_radios(stdout: str) -> tuple[RadioRow, ...]:
     return tuple(out)
 
 
+def _stamp_ok(text: object) -> bool:
+    """A real calendar date and clock time with an offset. Restated, field by
+    field, in controlslogic.js: JavaScript's own parser is more forgiving."""
+    if not isinstance(text, str):
+        return False
+    found = _STAMP.fullmatch(text)
+    if found is None:
+        return False
+    year, month, day, hour, minute, second, off_h, off_m = found.groups()
+    try:
+        datetime(int(year), int(month), int(day), int(hour), int(minute), int(second))
+    except ValueError:
+        return False
+    return (off_h is None or int(off_h) <= 23) and (off_m is None or int(off_m) <= 59)
+
+
+def parse_uplink(stdout: str) -> UplinkRow:
+    doc = _document(stdout, "uplink")
+    present = doc.get("present") is True
+    if not present:
+        return UplinkRow(False, "", "", None, _text(doc, "detail"))
+    mode = doc.get("mode")
+    if mode not in UPLINK_MODES:
+        raise ControlsError("the uplink has no mode this tray knows")
+    until = doc.get("until")
+    if until is not None and not _stamp_ok(until):
+        raise ControlsError("the uplink's expiry is not a stamp")
+    owner = doc.get("owner")
+    return UplinkRow(
+        True,
+        str(mode),
+        owner if isinstance(owner, str) and owner in _UPLINK_OWNERS else "none",
+        until,
+        _text(doc, "detail"),
+    )
+
+
 @dataclass(frozen=True)
 class GroupOutcome:
-    """What one poll means. ``doc`` is a ServicesDoc, a tuple of RadioRow,
-    or None. ``keep`` is true when the last good rows should stay on screen
+    """What one poll means. ``doc`` is a ServicesDoc, a tuple of RadioRow, an
+    UplinkRow, or None. ``keep`` is true when the last good rows should stay on screen
     (a failed read, as the device list does)."""
 
-    doc: ServicesDoc | tuple[RadioRow, ...] | None = None
+    doc: ServicesDoc | tuple[RadioRow, ...] | UplinkRow | None = None
     unsupported: bool = False
     error: str = ""
     keep: bool = False
@@ -223,10 +322,13 @@ def _argparse_refusal(stderr: str) -> bool:
 def poll_outcome(
     kind: str, started: bool, crashed: bool, code: int, stdout: str, stderr: str
 ) -> GroupOutcome:
-    if kind not in ("services", "radios"):
+    if kind not in ("services", "radios", "uplink"):
         raise ValueError(f"no such group {kind!r}")
-    read_error = SERVICES_READ_ERROR if kind == "services" else RADIOS_READ_ERROR
-    parse_error = SERVICES_PARSE_ERROR if kind == "services" else RADIOS_PARSE_ERROR
+    read_error, parse_error = {
+        "services": (SERVICES_READ_ERROR, SERVICES_PARSE_ERROR),
+        "radios": (RADIOS_READ_ERROR, RADIOS_PARSE_ERROR),
+        "uplink": (UPLINK_READ_ERROR, UPLINK_PARSE_ERROR),
+    }[kind]
     # Not there at all: the device poll says so in its own words, and the
     # groups are hidden with it.
     if not started or (not crashed and code == 127):
@@ -241,10 +343,13 @@ def poll_outcome(
     if crashed or code != 0:
         return GroupOutcome(error=stderr.strip() or read_error, keep=True)
     try:
+        doc: ServicesDoc | tuple[RadioRow, ...] | UplinkRow
         if kind == "services":
-            doc: ServicesDoc | tuple[RadioRow, ...] = parse_services(stdout.strip())
-        else:
+            doc = parse_services(stdout.strip())
+        elif kind == "radios":
             doc = parse_radios(stdout.strip())
+        else:
+            doc = parse_uplink(stdout.strip())
         # Parsed once already, so this cannot fail.
         version = _version(json.loads(stdout.strip(), parse_constant=_no_constant))
     except ControlsError:
@@ -263,6 +368,11 @@ def services_poll_argv(helper: str) -> tuple[str, list[str]]:
 
 def radios_poll_argv(helper: str) -> tuple[str, list[str]]:
     return helper, ["radio", "state"]
+
+
+def uplink_poll_argv(helper: str) -> tuple[str, list[str]]:
+    # No pkexec, no sudo: the link-priority manager runs as the user.
+    return helper, ["uplink", "state"]
 
 
 # -- the rules, and the words ------------------------------------------------
@@ -329,6 +439,63 @@ def radio_enabled(row: RadioRow, acting: bool) -> bool:
     return not acting and row.present and row.name in RADIO_NAMES
 
 
+def uplink_mode_label(mode: str) -> str:
+    return UPLINK_MODE_LABELS.get(mode, mode)
+
+
+def uplink_duration_label(duration: str) -> str:
+    for value, label in UPLINK_DURATIONS:
+        if value == duration:
+            return label
+    return duration
+
+
+def uplink_checked(row: UplinkRow, mode: str) -> bool:
+    return row.present and row.mode == mode
+
+
+def uplink_enabled(row: UplinkRow, acting: bool) -> bool:
+    return not acting and row.present
+
+
+def uplink_duration_enabled(row: UplinkRow, acting: bool) -> bool:
+    return not acting and row.present
+
+
+def uplink_needs_confirm(mode: str) -> bool:
+    """Cell first uses mobile data and asks first; going back to Auto never does."""
+    return mode == "cell-first"
+
+
+def uplink_confirm_text(duration: str) -> str:
+    when = "until you switch back to Auto" if duration == "0" else "for " + uplink_duration_label(duration)
+    return UPLINK_CONFIRM % when
+
+
+def until_text(until: str, now: float) -> str:
+    """When cell first ends, in the operator's local time: ``HH:MM`` if that is
+    today, else ``YYYY-MM-DD HH:MM``. ``now`` is epoch seconds; the stamp has
+    been checked by :func:`_stamp_ok` already."""
+    when = datetime.fromisoformat(until).astimezone()
+    if when.date() == datetime.fromtimestamp(now).date():
+        return when.strftime("%H:%M")
+    return when.strftime("%Y-%m-%d %H:%M")
+
+
+def uplink_indicator(row: UplinkRow, now: float) -> str:
+    """The one line that says where the default routes are and, for cell
+    first, when that ends."""
+    if not row.present:
+        return UPLINK_UNAVAILABLE % row.detail if row.detail else UPLINK_UNAVAILABLE_NO_DETAIL
+    if row.switching:
+        return UPLINK_SWITCHING % uplink_mode_label(row.mode)
+    if row.mode == "cell-first":
+        return UPLINK_CELL_UNTIL % until_text(row.until, now) if row.until else UPLINK_CELL_NO_EXPIRY
+    if row.owner in _UPLINK_OWNER_LABELS:
+        return UPLINK_AUTO_OWNER % _UPLINK_OWNER_LABELS[row.owner]
+    return UPLINK_AUTO_NONE
+
+
 # -- argv, and only the argv the helper accepts -------------------------------
 
 
@@ -354,6 +521,18 @@ def radio_argv(helper: str, row: RadioRow, on: bool) -> tuple[str, list[str]]:
     if row.name not in RADIO_NAMES:
         raise ValueError(f"refusing radio {row.name!r}")
     return helper, ["radio", "on" if on else "off", row.name]
+
+
+def uplink_argv(helper: str, mode: str, duration: str) -> tuple[str, list[str]]:
+    """The helper directly, never pkexec. The duration must be one this tray
+    offers, so nothing else reaches the CLI's ``--for``."""
+    if mode not in UPLINK_MODES:
+        raise ValueError(f"refusing uplink mode {mode!r}")
+    if duration not in dict(UPLINK_DURATIONS):
+        raise ValueError(f"refusing uplink duration {duration!r}")
+    if mode == "auto":
+        return helper, ["uplink", "auto"]
+    return helper, ["uplink", "cell-first", "--for", duration]
 
 
 def direct_error(started: bool, crashed: bool, code: int, stderr: str) -> str:
@@ -392,6 +571,10 @@ def radio_pending(name: str, on: bool) -> tuple[str, bool]:
     return f"radio:{name}:enabled", on
 
 
+def uplink_pending(mode: str) -> tuple[str, str]:
+    return "uplink:mode", mode
+
+
 def pending_fresh(started_epoch: int | None, epoch: int, acting: bool) -> bool:
     """May a poll that has just landed end the operator's pending requests?
     Only one that started after the last verb finished: one that was already
@@ -426,3 +609,12 @@ def effective_radios(rows: tuple[RadioRow, ...], pending: Pending) -> tuple[Radi
         on = want.get(f"radio:{row.name}:enabled")
         out.append(replace(row, enabled=on if isinstance(on, bool) else row.enabled))
     return tuple(out)
+
+
+def effective_uplink(row: UplinkRow, pending: Pending) -> UplinkRow:
+    """The row as the operator would see it if their request had worked: the
+    mode they asked for, marked as switching (its expiry is not known yet)."""
+    want = dict(pending).get("uplink:mode")
+    if not row.present or not isinstance(want, str) or want == row.mode:
+        return row
+    return replace(row, mode=want, until=None, switching=True)

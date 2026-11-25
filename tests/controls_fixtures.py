@@ -202,3 +202,72 @@ RADIOS_POLLS = {
     "version-float": (0, json.dumps(RADIOS_D2).replace('"version": 1,', '"version": 1.0,', 1), ""),
     "nan": (0, '{"kind": "radios", "version": Infinity, "radios": []}', ""),
 }
+
+
+# -- the Uplink group (helper contract v1, `uplink state`) --------------------
+
+
+def uplink_doc(**kw):
+    doc = {
+        "kind": "uplink",
+        "version": 1,
+        "present": True,
+        "mode": "auto",
+        "owner": "wifi",
+        "until": None,
+        "since": "2026-11-24T10:00:00Z",
+        "detail": "",
+    }
+    doc.update(kw)
+    return doc
+
+
+UPLINKS = {
+    "auto-wifi": uplink_doc(),
+    "auto-ethernet": uplink_doc(owner="ethernet"),
+    "auto-cell": uplink_doc(owner="cell"),
+    "auto-none": uplink_doc(owner="none"),
+    "auto-unknown-owner": uplink_doc(owner="satellite"),
+    "cell-first": uplink_doc(mode="cell-first", owner="cell", until="2026-11-24T14:30:00Z"),
+    "cell-first-offset": uplink_doc(mode="cell-first", owner="cell", until="2026-11-24T14:30:00.25+02:00"),
+    "cell-first-next-day": uplink_doc(mode="cell-first", owner="cell", until="2026-11-25T01:05:00Z"),
+    "cell-first-no-expiry": uplink_doc(mode="cell-first", owner="cell", until=None),
+    "cell-first-no-owner": uplink_doc(mode="cell-first", owner="none", until="2026-11-24T14:30:00Z"),
+    "missing": uplink_doc(present=False, mode="", owner="", detail="quectel-usbnet is not installed"),
+    "failed": uplink_doc(present=False, mode="", owner="", detail="quectel-usbnet could not read the uplink: error: boom"),
+    "no-detail": uplink_doc(present=False, mode="", owner="", detail=""),
+    "newer-version": uplink_doc(version=2, extra_key="ignored"),
+}
+
+# The stamps above are read against this "now" (2026-11-24 12:00:00 UTC), in
+# the zones the parity test runs both languages under.
+UPLINK_NOW = 1795521600
+
+UPLINK_POLLS = {
+    "ok": (0, json.dumps(UPLINKS["cell-first"]) + "\n", ""),
+    "old-helper": (2, "", _OLD % "uplink"),
+    "missing": (127, "", "sh: 1: /usr/local/libexec/hammunition-devctl: not found\n"),
+    "failed-with-stderr": (1, "", "error: boom\n"),
+    "failed-silently": (1, "", ""),
+    "refused": (2, "", "error: refused\n"),
+    "not-json": (0, "note: something else answered\n", ""),
+    "an-array": (0, "[]\n", ""),
+    "null": (0, "null", ""),
+    "wrong-kind": (0, json.dumps(RADIOS_D2), ""),
+    "no-mode": (0, json.dumps(uplink_doc(mode="")), ""),
+    "bad-mode": (0, json.dumps(uplink_doc(mode="turbo")), ""),
+    "bad-until": (0, json.dumps(uplink_doc(mode="cell-first", until="tomorrow")), ""),
+    "until-not-a-string": (0, json.dumps(uplink_doc(mode="cell-first", until=5)), ""),
+    "until-no-offset": (0, json.dumps(uplink_doc(mode="cell-first", until="2026-11-24T14:30:00")), ""),
+    "until-feb-30": (0, json.dumps(uplink_doc(mode="cell-first", until="2026-02-30T10:00:00Z")), ""),
+    "until-hour-24": (0, json.dumps(uplink_doc(mode="cell-first", until="2026-11-24T24:00:00Z")), ""),
+    "until-second-60": (0, json.dumps(uplink_doc(mode="cell-first", until="2026-11-24T10:00:60Z")), ""),
+    "until-offset-99": (0, json.dumps(uplink_doc(mode="cell-first", until="2026-11-24T10:00:00+99:99")), ""),
+    "until-trailing-newline": (0, json.dumps(uplink_doc(mode="cell-first", until="2026-11-24T10:00:00Z\n")), ""),
+    "until-leap-day": (0, json.dumps(uplink_doc(mode="cell-first", until="2028-02-29T10:00:00Z")), ""),
+    "version-0": (0, json.dumps(uplink_doc(version=0)), ""),
+    "newer-version": (0, json.dumps(UPLINKS["newer-version"]), ""),
+    "version-float": (0, json.dumps(UPLINKS["auto-wifi"]).replace('"version": 1,', '"version": 1.0,', 1), ""),
+    "nan": (0, '{"kind": "uplink", "version": NaN, "present": true}', ""),
+    "unavailable": (0, json.dumps(UPLINKS["missing"]), ""),
+}
