@@ -36,6 +36,7 @@ _CHECKOUT_ICONS = Path(__file__).resolve().parents[2] / "plasmoid/package/conten
 _CHECKOUT_FILES = {
     logic.ICON_AWAKE: "hammunition-devices-awake.svg",
     logic.ICON_PARKED: "hammunition-devices-parked.svg",
+    logic.ICON_REPAIR: "hammunition-devices-repair.svg",
 }
 
 Done = Callable[[ProcResult], None]
@@ -106,7 +107,7 @@ class Tray(QObject):
     ) -> None:
         super().__init__()
         self.runner = runner or QtRunner(self)
-        # Asked before Cell first, which uses mobile data. A test passes its
+        # Asked before Network Repair, which uses mobile data. A test passes its
         # own, so no dialog is ever opened under test.
         self.confirm: Callable[[str], bool] = confirm or self._ask_confirm
         self.state = TrayState()
@@ -281,15 +282,16 @@ class Tray(QObject):
 
     def act_uplink(self, entry: MenuEntry) -> None:
         if entry.kind == "uplink-duration":
-            # Only the choice for the next Cell first: nothing runs.
+            # Only the choice for the next Network Repair: nothing runs.
             if entry.duration is not None and not self.state.acting:
                 self.state = logic.set_uplink_duration(self.state, entry.duration)
             self._render(force=True)
             return
         if self.state.acting or entry.verb is None or entry.duration is None:
             return
-        if entry.checked:
-            # Already the mode: the item unchecked itself on the click.
+        if entry.checked and entry.kind != "repair":
+            # Already the mode: the item unchecked itself on the click. (The
+            # Network Repair item is a toggle: checked means a click turns it off.)
             self._render(force=True)
             return
         if controls.uplink_needs_confirm(entry.verb) and not self.confirm(
@@ -300,7 +302,7 @@ class Tray(QObject):
         self.act_control(entry)
 
     def act(self, entry: MenuEntry) -> None:
-        if entry.kind in ("uplink-mode", "uplink-duration"):
+        if entry.kind in ("uplink-mode", "uplink-duration", "repair"):
             self.act_uplink(entry)
             return
         if entry.kind in ("service-run", "service-login", "radio"):
@@ -369,13 +371,14 @@ class Tray(QObject):
             action.setToolTip(entry.text)
             action.setEnabled(entry.enabled)
             if entry.kind in (
-                "toggle", "mode", "service-run", "service-login", "radio", "uplink-mode", "uplink-duration"
+                "toggle", "mode", "service-run", "service-login", "radio", "uplink-mode", "uplink-duration",
+                "repair",
             ):
                 action.setCheckable(True)
                 action.setChecked(bool(entry.checked))
             if entry.kind in (
                 "toggle", "forget", "mode", "service-run", "service-login", "radio", "uplink-mode",
-                "uplink-duration",
+                "uplink-duration", "repair",
             ):
                 action.triggered.connect(lambda _=False, e=entry: self.act(e))
             elif entry.kind == "quit":

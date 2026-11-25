@@ -60,11 +60,20 @@ UPLINK_UNAVAILABLE = "not available: %s"
 UPLINK_UNAVAILABLE_NO_DETAIL = "not available"
 UPLINK_AUTO_OWNER = "Auto: using %s"
 UPLINK_AUTO_NONE = "Auto: no link has a route"
-UPLINK_CELL_UNTIL = "Cell first until %s"
-UPLINK_CELL_NO_EXPIRY = "Cell first, no expiry"
+UPLINK_CELL_UNTIL = "Network Repair: cellular first, until %s"
+UPLINK_CELL_NO_EXPIRY = "Network Repair: cellular first, no expiry"
 UPLINK_SWITCHING = "Switching to %s…"
-UPLINK_DURATION_HEADING = "Cell first for"
-UPLINK_CONFIRM = "Cell first uses mobile data %s. Turn it on?"
+UPLINK_DURATION_HEADING = "Network Repair for"
+# What the owner is asked before Network Repair turns on: what it does to the
+# routes, what happens to the VPN, and that mobile data is metered.
+UPLINK_CONFIRM = (
+    "Network Repair makes cellular the main connection and takes Wi-Fi and Ethernet "
+    "out of the default route %s. The VPN will reconnect over cellular. "
+    "Cellular data is metered. Turn it on?"
+)
+# The name the owner sees for the CLI's ``cell-first``. The mode, the verbs and
+# the JSON keep the CLI's name: other code depends on them.
+REPAIR_LABEL = "Network Repair"
 UPLINK_CONFIRM_YES = "Use mobile data"
 UPLINK_CONFIRM_NO = "Cancel"
 
@@ -75,6 +84,7 @@ STRINGS: dict[str, str] = {
     "group_services": GROUP_SERVICES,
     "group_radios": GROUP_RADIOS,
     "group_uplink": GROUP_UPLINK,
+    "repair_label": REPAIR_LABEL,
     "update": UPDATE,
     "login_label": LOGIN_LABEL,
     "reading_services": READING_SERVICES,
@@ -110,7 +120,7 @@ RADIO_LABELS = {
 # list of durations this tray offers (`--for`; "0" is no expiry), and the one
 # it starts on.
 UPLINK_MODES = ("auto", "cell-first")
-UPLINK_MODE_LABELS = {"auto": "Auto", "cell-first": "Cell first"}
+UPLINK_MODE_LABELS = {"auto": "Auto", "cell-first": REPAIR_LABEL}
 UPLINK_DURATIONS = (
     ("30m", "30 minutes"),
     ("1h", "1 hour"),
@@ -462,18 +472,41 @@ def uplink_duration_enabled(row: UplinkRow, acting: bool) -> bool:
     return not acting and row.present
 
 
+def repair_active(row: UplinkRow) -> bool:
+    """Network Repair is on: the manager is in ``cell-first``. Read from the
+    row as drawn, so a request just made counts at once."""
+    return row.present and row.mode == "cell-first"
+
+
+def repair_next_mode(row: UplinkRow) -> str:
+    """What one click on Network Repair asks for: off when it is on, else on."""
+    return "auto" if repair_active(row) else "cell-first"
+
+
+def repair_enabled(row: UplinkRow, acting: bool) -> bool:
+    return not acting and row.present
+
+
+def repair_tooltip(row: UplinkRow, now: float) -> str:
+    """The tooltip line while Network Repair is on, ``""`` while it is not."""
+    return uplink_indicator(row, now) if repair_active(row) else ""
+
+
 def uplink_needs_confirm(mode: str) -> bool:
-    """Cell first uses mobile data and asks first; going back to Auto never does."""
+    """Network Repair uses mobile data and asks first; going back to Auto never does."""
     return mode == "cell-first"
 
 
 def uplink_confirm_text(duration: str) -> str:
-    when = "until you switch back to Auto" if duration == "0" else "for " + uplink_duration_label(duration)
+    if duration == "0":
+        when = "until you turn it off"
+    else:
+        when = "until you turn it off or it expires in " + uplink_duration_label(duration)
     return UPLINK_CONFIRM % when
 
 
 def until_text(until: str, now: float) -> str:
-    """When cell first ends, in the operator's local time: ``HH:MM`` if that is
+    """When Network Repair ends, in the operator's local time: ``HH:MM`` if that is
     today, else ``YYYY-MM-DD HH:MM``. ``now`` is epoch seconds; the stamp has
     been checked by :func:`_stamp_ok` already."""
     when = datetime.fromisoformat(until).astimezone()
@@ -483,8 +516,8 @@ def until_text(until: str, now: float) -> str:
 
 
 def uplink_indicator(row: UplinkRow, now: float) -> str:
-    """The one line that says where the default routes are and, for cell
-    first, when that ends."""
+    """The one line that says where the default routes are and, for Network
+    Repair, when that ends."""
     if not row.present:
         return UPLINK_UNAVAILABLE % row.detail if row.detail else UPLINK_UNAVAILABLE_NO_DETAIL
     if row.switching:

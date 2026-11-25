@@ -1,0 +1,30 @@
+<!--
+  SPDX-FileCopyrightText: Copyright (C) 2026 ChiefGyk3D
+  SPDX-License-Identifier: GPL-3.0-or-later
+
+  The tray icon while Network Repair is on (cellular holds the default
+  routes). A dark disc with an amber ring and four cellular signal bars, and
+  Tux without the handheld: the one icon that reads differently at 16 px
+  from the other two. Dark on purpose, no light fill but the penguin's own.
+  No clipPath, mask or filter: Qt's SVG renderer, which Plasma draws icons
+  with, ignores them.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <circle cx="32" cy="32" r="30" fill="#1b1420"/>
+  <circle cx="32" cy="32" r="28" fill="none" stroke="#ed9a1c" stroke-width="3"/>
+  <path d="M5.4 41 Q16 38 32 44 Q46 49 58.6 41 A28 28 0 0 1 5.4 41 Z" fill="#2b0b30"/>
+  <ellipse cx="24" cy="41" rx="12" ry="15" fill="#111418"/>
+  <circle cx="24" cy="24" r="9.5" fill="#111418"/>
+  <ellipse cx="24" cy="43" rx="7.5" ry="10.5" fill="#f4f1ea"/>
+  <ellipse cx="20.5" cy="23" rx="2.6" ry="3.2" fill="#f4f1ea"/>
+  <ellipse cx="27.5" cy="23" rx="2.6" ry="3.2" fill="#f4f1ea"/>
+  <circle cx="21" cy="23.6" r="1.3" fill="#111418"/>
+  <circle cx="27" cy="23.6" r="1.3" fill="#111418"/>
+  <ellipse cx="24" cy="28.5" rx="4" ry="2" fill="#ed9a1c"/>
+  <ellipse cx="18" cy="56" rx="4.5" ry="2.2" fill="#ed9a1c"/>
+  <ellipse cx="30" cy="56" rx="4.5" ry="2.2" fill="#ed9a1c"/>
+  <rect class="cell-bar" x="37" y="43" width="4" height="6" rx="1" fill="#ed9a1c"/>
+  <rect class="cell-bar" x="42" y="38" width="4" height="11" rx="1" fill="#ed9a1c"/>
+  <rect class="cell-bar" x="47" y="33" width="4" height="16" rx="1" fill="#ed9a1c"/>
+  <rect class="cell-bar" x="52" y="28" width="4" height="21" rx="1" fill="#ed9a1c"/>
+</svg>

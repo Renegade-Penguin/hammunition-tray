@@ -76,6 +76,7 @@ function strings(tr) {
         group_services: tr("Services"),
         group_radios: tr("Radios"),
         group_uplink: tr("Uplink"),
+        repair_label: tr("Network Repair"),
         update: tr("update hammunition-tray"),
         login_label: tr("Start at login"),
         reading_services: tr("Reading services…"),
@@ -92,8 +93,8 @@ function strings(tr) {
         uplink_parse_error: tr("Could not parse the uplink state"),
         uplink_unavailable_no_detail: tr("not available"),
         uplink_auto_none: tr("Auto: no link has a route"),
-        uplink_cell_no_expiry: tr("Cell first, no expiry"),
-        uplink_duration_heading: tr("Cell first for"),
+        uplink_cell_no_expiry: tr("Network Repair: cellular first, no expiry"),
+        uplink_duration_heading: tr("Network Repair for"),
         uplink_confirm_yes: tr("Use mobile data"),
         uplink_confirm_no: tr("Cancel")
     };
@@ -298,7 +299,7 @@ function radioEnabled(row, acting) {
 function uplinkModeLabel(mode, tr) {
     switch (mode) {
     case "auto": return tr("Auto");
-    case "cell-first": return tr("Cell first");
+    case "cell-first": return tr("Network Repair");
     }
     return mode;
 }
@@ -327,22 +328,42 @@ function uplinkDurationEnabled(row, acting) {
     return !acting && row.present;
 }
 
-// Cell first uses mobile data and asks first; going back to Auto never does.
+// One click on Network Repair, the owner's name for the CLI's cell-first:
+// whether it is on, what a click asks for, and the tooltip line while it is on.
+function repairActive(row) {
+    return row.present && row.mode === "cell-first";
+}
+
+function repairNextMode(row) {
+    return repairActive(row) ? "auto" : "cell-first";
+}
+
+function repairEnabled(row, acting) {
+    return !acting && row.present;
+}
+
+function repairTooltip(row, now, tr) {
+    return repairActive(row) ? uplinkIndicator(row, now, tr) : "";
+}
+
+// Network Repair uses mobile data and asks first; going back to Auto never does.
 function uplinkNeedsConfirm(mode) {
     return mode === "cell-first";
 }
 
 function uplinkConfirmText(duration, tr) {
-    var when = duration === "0" ? tr("until you switch back to Auto")
-        : tr("for %1", uplinkDurationLabel(duration, tr));
-    return tr("Cell first uses mobile data %1. Turn it on?", when);
+    var when = duration === "0" ? tr("until you turn it off")
+        : tr("until you turn it off or it expires in %1", uplinkDurationLabel(duration, tr));
+    return tr("Network Repair makes cellular the main connection and takes Wi-Fi and Ethernet "
+        + "out of the default route %1. The VPN will reconnect over cellular. "
+        + "Cellular data is metered. Turn it on?", when);
 }
 
 function pad2(n) {
     return n < 10 ? "0" + n : String(n);
 }
 
-// When cell first ends, in the operator's local time: HH:MM if that is today,
+// When Network Repair ends, in the operator's local time: HH:MM if that is today,
 // else YYYY-MM-DD HH:MM. `now` is epoch seconds.
 function untilText(until, now) {
     var when = new Date(until);
@@ -354,15 +375,15 @@ function untilText(until, now) {
     return when.getFullYear() + "-" + pad2(when.getMonth() + 1) + "-" + pad2(when.getDate()) + " " + clock;
 }
 
-// The one line that says where the default routes are and, for cell first,
+// The one line that says where the default routes are and, for Network Repair,
 // when that ends.
 function uplinkIndicator(row, now, tr) {
     if (!row.present)
         return row.detail !== "" ? tr("not available: %1", row.detail) : tr("not available");
     if (row.switching) return tr("Switching to %1…", uplinkModeLabel(row.mode, tr));
     if (row.mode === "cell-first")
-        return row.until !== null ? tr("Cell first until %1", untilText(row.until, now))
-            : tr("Cell first, no expiry");
+        return row.until !== null ? tr("Network Repair: cellular first, until %1", untilText(row.until, now))
+            : tr("Network Repair: cellular first, no expiry");
     switch (row.owner) {
     case "ethernet": return tr("Auto: using %1", tr("Ethernet"));
     case "wifi": return tr("Auto: using %1", tr("Wi-Fi"));

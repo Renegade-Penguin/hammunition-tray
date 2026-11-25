@@ -188,7 +188,11 @@ class Icons(unittest.TestCase):
     def test_both_states_ship(self):
         self.assertEqual(
             self.svgs(),
-            ["hammunition-devices-awake.svg", "hammunition-devices-parked.svg"],
+            [
+                "hammunition-devices-awake.svg",
+                "hammunition-devices-parked.svg",
+                "hammunition-devices-repair.svg",
+            ],
         )
 
     def test_no_element_qt_ignores(self):
@@ -206,6 +210,26 @@ class Icons(unittest.TestCase):
         parked = read(os.path.join(ICONS, "hammunition-devices-parked.svg"))
         self.assertIn(" A8 8 ", awake)
         self.assertNotIn(" A8 8 ", parked)
+
+    def test_the_repair_icon_is_dark_and_has_its_own_signal_bars(self):
+        repair = read(os.path.join(ICONS, "hammunition-devices-repair.svg"))
+        awake = read(os.path.join(ICONS, "hammunition-devices-awake.svg"))
+        parked = read(os.path.join(ICONS, "hammunition-devices-parked.svg"))
+        self.assertNotEqual(repair, awake)
+        self.assertNotEqual(repair, parked)
+        # The cellular bars are what has to read at 16 px: four rects.
+        self.assertEqual(repair.count("<rect"), 4)
+        self.assertEqual(repair.count('class="cell-bar"'), 4)
+        # Dark theme only: no light fill but the penguin's own belly and eyes.
+        for colour in re.findall(r'fill="(#[0-9a-fA-F]{6})"', repair):
+            r, g, b = (int(colour[i : i + 2], 16) for i in (1, 3, 5))
+            if (r + g + b) / 3 > 200:
+                self.assertEqual(colour.lower(), "#f4f1ea", "the only light colour is the penguin's")
+        disc = re.search(r'<circle cx="32" cy="32" r="30" fill="(#[0-9a-fA-F]{6})"', repair)
+        self.assertIsNotNone(disc)
+        r, g, b = (int(disc.group(1)[i : i + 2], 16) for i in (1, 3, 5))
+        self.assertLess((r + g + b) / 3, 80, "the disc is dark")
+        self.assertTrue(repair.isascii(), "no emoji or other symbols in the art")
 
     def test_every_icon_the_qml_names_exists(self):
         for name in qml_files():
@@ -603,6 +627,62 @@ class Controls(unittest.TestCase):
             "checked = Qt.binding(() => root.effectiveUplink !== null && Controls.uplinkChecked(root.effectiveUplink, modelData))",
             self.full(),
         )
+
+    # -- Network Repair: one click, an icon that changes -------------------
+
+    def test_the_applet_knows_when_network_repair_is_on(self):
+        self.assertRegex(
+            self.main(),
+            r"readonly property bool repairActive:\s*effectiveUplink !== null && Controls\.repairActive\(effectiveUplink\)",
+        )
+
+    def test_the_compact_icon_swaps_to_the_repair_art_and_is_not_hidden(self):
+        compact = read(os.path.join(UI, "CompactRepresentation.qml"))
+        self.assertIn('"../icons/hammunition-devices-repair.svg"', compact)
+        self.assertLess(compact.index("root.repairActive"), compact.index("root.anyParked"))
+        self.assertRegex(self.main(), r"Plasmoid\.status:\s*root\.anyParked \|\| root\.repairActive")
+
+    def test_the_tooltip_says_network_repair_and_until_when(self):
+        main = self.main()
+        tip = main[main.index("toolTipSubText:") : main.index("compactRepresentation:")]
+        self.assertIn("Controls.repairTooltip(effectiveUplink, Date.now() / 1000, root.tr)", tip)
+
+    def test_a_right_click_action_toggles_it_and_opens_the_question(self):
+        main = self.main()
+        start = main.index("Plasmoid.contextualActions")
+        action = main[start : main.index("compactRepresentation:")]
+        self.assertIn("PlasmaCore.Action", action)
+        self.assertIn("root.controlStrings.repair_label", action)
+        self.assertIn("checked: root.repairActive", action)
+        self.assertIn("onTriggered: root.toggleRepair()", action)
+        body = self.uplink_fn("toggleRepair")
+        self.assertIn("Controls.repairNextMode(effectiveUplink)", body)
+        self.assertIn("setUplink(", body)
+        # Turning it on asks, in the popup, so the popup must be open to show it.
+        self.assertIn("expanded = true", body)
+        for word in ("pkexec", "sudo", "exec.run"):
+            self.assertNotIn(word, body)
+
+    def test_the_popup_leads_with_a_network_repair_button(self):
+        full = self.full()
+        button = full.index("root.controlStrings.repair_label")
+        self.assertLess(button, full.index("root.controlStrings.group_devices"))
+        self.assertIn("root.toggleRepair();", full)
+        self.assertIn("checked = Qt.binding(() => root.repairActive);", full)
+        self.assertIn(
+            "enabled: root.effectiveUplink !== null && Controls.repairEnabled(root.effectiveUplink, root.acting)", full
+        )
+        self.assertIn("checked: root.repairActive", full)
+        # The question shows beside the button as well as in the Uplink group.
+        self.assertEqual(full.count("root.confirmUplink()"), 2)
+        self.assertEqual(full.count("root.cancelUplink()"), 2)
+        self.assertLess(full.index("root.confirmUplink()"), full.index("root.controlStrings.group_devices"))
+
+    def test_no_file_the_owner_reads_says_cell_first(self):
+        names = sorted(os.listdir(UI))
+        self.assertIn("main.qml", names)
+        for name in names:
+            self.assertIsNone(re.search("cell first", read(os.path.join(UI, name)), re.I), name)
 
     def test_a_helper_without_the_verb_is_one_line_per_group(self):
         full = self.full()

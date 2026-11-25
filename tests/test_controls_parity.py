@@ -437,6 +437,18 @@ for (const c of input.argv) {
   try { out.argv.push({ ok: Array.from(L.uplinkArgv(c.helper, c.mode, c.duration)) }); }
   catch (e) { out.argv.push({ refused: true }); }
 }
+out.repair = {};
+for (const [name, doc] of Object.entries(input.docs)) {
+  const r = L.parseUplink(JSON.stringify(doc));
+  out.repair[name] = {
+    active: L.repairActive(r),
+    next: L.repairNextMode(r),
+    enabled: [L.repairEnabled(r, false), L.repairEnabled(r, true)],
+    tooltip: L.repairTooltip(r, input.now, tr),
+    pendingOn: L.repairActive(L.effectiveUplink(r, { "uplink:mode": "cell-first" })),
+    pendingOff: L.repairActive(L.effectiveUplink(r, { "uplink:mode": "auto" })),
+  };
+}
 for (const [value] of L.UPLINK_DURATIONS) out.confirm[value] = L.uplinkConfirmText(value, tr);
 for (const m of input.modes) { out.needs[m] = L.uplinkNeedsConfirm(m); out.labels[m] = L.uplinkModeLabel(m, tr); }
 out.durationLabels = Object.fromEntries(L.UPLINK_DURATIONS.map(([v]) => [v, L.uplinkDurationLabel(v, tr)]));
@@ -533,15 +545,43 @@ class UplinkParity(unittest.TestCase):
                         self.assertEqual(got["row"], as_js(want))
                         self.assertEqual(got["indicator"], controls.uplink_indicator(want, UPLINK_NOW))
 
+    def test_network_repair_rules_and_words_are_the_same_in_every_zone(self):
+        for zone in ZONES:
+            self.in_zone(zone)
+            for name, doc in UPLINKS.items():
+                with self.subTest(zone=zone, doc=name):
+                    row = controls.parse_uplink(json.dumps(doc))
+                    js = self.js[zone]["repair"][name]
+                    self.assertEqual(js["active"], controls.repair_active(row))
+                    self.assertEqual(js["next"], controls.repair_next_mode(row))
+                    self.assertEqual(
+                        js["enabled"], [controls.repair_enabled(row, False), controls.repair_enabled(row, True)]
+                    )
+                    self.assertEqual(js["tooltip"], controls.repair_tooltip(row, UPLINK_NOW))
+                    on = controls.effective_uplink(row, (controls.uplink_pending("cell-first"),))
+                    off = controls.effective_uplink(row, (controls.uplink_pending("auto"),))
+                    self.assertEqual(js["pendingOn"], controls.repair_active(on))
+                    self.assertEqual(js["pendingOff"], controls.repair_active(off))
+
+    def test_the_icon_state_mapping_is_not_vacuous(self):
+        # Guards the guard: both answers occur, and the tooltip is worded.
+        js = self.js["UTC"]["repair"]
+        self.assertEqual({v["active"] for v in js.values()}, {True, False})
+        self.assertEqual(js["cell-first"]["tooltip"], "Network Repair: cellular first, until 14:30")
+        self.assertEqual(js["cell-first-no-expiry"]["tooltip"], "Network Repair: cellular first, no expiry")
+        self.assertEqual(js["auto-wifi"]["tooltip"], "")
+        self.assertEqual(self.js["America/New_York"]["repair"]["cell-first"]["tooltip"],
+                         "Network Repair: cellular first, until 09:30")
+
     def test_the_zones_really_differ(self):
         # Guards the guard: were the zone ignored, every zone would agree.
         docs = {z: self.js[z]["docs"]["cell-first"]["indicator"] for z in ZONES}
         self.assertEqual(
             docs,
             {
-                "UTC": "Cell first until 14:30",
-                "America/New_York": "Cell first until 09:30",
-                "Asia/Kolkata": "Cell first until 20:00",
+                "UTC": "Network Repair: cellular first, until 14:30",
+                "America/New_York": "Network Repair: cellular first, until 09:30",
+                "Asia/Kolkata": "Network Repair: cellular first, until 20:00",
             },
         )
 

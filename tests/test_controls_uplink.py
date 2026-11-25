@@ -153,16 +153,16 @@ class Words(InZone):
         self.assertEqual(self.text("auto-none"), "Auto: no link has a route")
 
     def test_cell_first_says_when_it_ends_today_as_a_time(self):
-        self.assertEqual(self.text("cell-first"), "Cell first until 14:30")
+        self.assertEqual(self.text("cell-first"), "Network Repair: cellular first, until 14:30")
 
     def test_cell_first_says_the_date_when_it_ends_on_another_day(self):
-        self.assertEqual(self.text("cell-first-next-day"), "Cell first until 2026-11-25 01:05")
+        self.assertEqual(self.text("cell-first-next-day"), "Network Repair: cellular first, until 2026-11-25 01:05")
 
     def test_an_offset_stamp_is_shown_in_local_time(self):
-        self.assertEqual(self.text("cell-first-offset"), "Cell first until 12:30")
+        self.assertEqual(self.text("cell-first-offset"), "Network Repair: cellular first, until 12:30")
 
     def test_no_expiry_says_so(self):
-        self.assertEqual(self.text("cell-first-no-expiry"), "Cell first, no expiry")
+        self.assertEqual(self.text("cell-first-no-expiry"), "Network Repair: cellular first, no expiry")
 
     def test_unavailable_names_the_reason(self):
         self.assertEqual(self.text("missing"), "not available: quectel-usbnet is not installed")
@@ -170,7 +170,7 @@ class Words(InZone):
 
     def test_the_mode_names(self):
         self.assertEqual(controls.uplink_mode_label("auto"), "Auto")
-        self.assertEqual(controls.uplink_mode_label("cell-first"), "Cell first")
+        self.assertEqual(controls.uplink_mode_label("cell-first"), "Network Repair")
 
     def test_the_durations_default_to_two_hours_and_include_no_expiry(self):
         self.assertEqual(controls.UPLINK_DEFAULT_DURATION, "2h")
@@ -180,11 +180,11 @@ class Words(InZone):
 
     def test_the_confirmation_says_mobile_data_and_for_how_long(self):
         self.assertEqual(
-            controls.uplink_confirm_text("2h"), "Cell first uses mobile data for 2 hours. Turn it on?"
+            controls.uplink_confirm_text("2h"), "Network Repair makes cellular the main connection and takes Wi-Fi and Ethernet out of the default route until you turn it off or it expires in 2 hours. The VPN will reconnect over cellular. Cellular data is metered. Turn it on?"
         )
         self.assertEqual(
             controls.uplink_confirm_text("0"),
-            "Cell first uses mobile data until you switch back to Auto. Turn it on?",
+            "Network Repair makes cellular the main connection and takes Wi-Fi and Ethernet out of the default route until you turn it off. The VPN will reconnect over cellular. Cellular data is metered. Turn it on?",
         )
 
     def test_only_cell_first_asks(self):
@@ -200,18 +200,18 @@ class NewYork(Words):
     zone = "America/New_York"
 
     def test_the_same_stamp_is_the_operators_local_time(self):
-        self.assertEqual(self.text("cell-first"), "Cell first until 09:30")
+        self.assertEqual(self.text("cell-first"), "Network Repair: cellular first, until 09:30")
 
     # the cases of Words that assume UTC
     def test_cell_first_says_when_it_ends_today_as_a_time(self):
-        self.assertEqual(self.text("cell-first"), "Cell first until 09:30")
+        self.assertEqual(self.text("cell-first"), "Network Repair: cellular first, until 09:30")
 
     def test_cell_first_says_the_date_when_it_ends_on_another_day(self):
         # 20:05 local on the 24th is still the same local day as "now" (07:00)
-        self.assertEqual(self.text("cell-first-next-day"), "Cell first until 20:05")
+        self.assertEqual(self.text("cell-first-next-day"), "Network Repair: cellular first, until 20:05")
 
     def test_an_offset_stamp_is_shown_in_local_time(self):
-        self.assertEqual(self.text("cell-first-offset"), "Cell first until 07:30")
+        self.assertEqual(self.text("cell-first-offset"), "Network Repair: cellular first, until 07:30")
 
 
 class Rules(unittest.TestCase):
@@ -266,7 +266,7 @@ class Pending(unittest.TestCase):
     def test_effective_shows_the_intent_as_switching(self):
         r = controls.effective_uplink(uplink("auto-wifi"), (controls.uplink_pending("cell-first"),))
         self.assertEqual((r.mode, r.switching, r.until), ("cell-first", True, None))
-        self.assertEqual(controls.uplink_indicator(r, UPLINK_NOW), "Switching to Cell first…")
+        self.assertEqual(controls.uplink_indicator(r, UPLINK_NOW), "Switching to Network Repair…")
         back = controls.effective_uplink(uplink("cell-first"), (controls.uplink_pending("auto"),))
         self.assertEqual(controls.uplink_indicator(back, UPLINK_NOW), "Switching to Auto…")
 
@@ -307,7 +307,7 @@ class Transitions(unittest.TestCase):
         self.assertTrue(s.acting)
         self.assertEqual(s.pending, (("uplink:mode", "cell-first"),))
         [info] = entries(s, "info")[-1:]  # the indicator is the last info line of the group
-        self.assertEqual(info.text, "Switching to Cell first…")
+        self.assertEqual(info.text, "Switching to Network Repair…")
 
     def test_the_chosen_duration_goes_on_the_command(self):
         s = logic.set_uplink_duration(with_uplink("auto-wifi"), "30m")
@@ -382,11 +382,11 @@ class Menu(InZone):
         self.assertEqual([(e.kind, e.text) for e in g if e.kind == "info"], [("info", "Auto: using Wi-Fi")])
         modes = [e for e in g if e.kind == "uplink-mode"]
         self.assertEqual([(e.text, e.checked, e.enabled, e.verb) for e in modes],
-                         [("Auto", True, True, "auto"), ("Cell first", False, True, "cell-first")])
+                         [("Auto", True, True, "auto"), ("Network Repair", False, True, "cell-first")])
 
     def test_cell_first_state_has_its_expiry_and_the_duration_choice(self):
         g = self.group(with_uplink("cell-first"))
-        self.assertIn(("info", "Cell first until 14:30"), [(e.kind, e.text) for e in g])
+        self.assertIn(("info", "Network Repair: cellular first, until 14:30"), [(e.kind, e.text) for e in g])
         self.assertIn(("note", controls.UPLINK_DURATION_HEADING), [(e.kind, e.text) for e in g])
         durs = [e for e in g if e.kind == "uplink-duration"]
         self.assertEqual([e.duration for e in durs], ["30m", "1h", "2h", "4h", "8h", "0"])

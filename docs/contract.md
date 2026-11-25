@@ -277,7 +277,15 @@ only what it recognizes; the CLI's per-link table is not passed on.
   The exit code is still 0: a front end shows `detail` as "not available"
   and offers nothing to press. It is the same shape as an absent radio tool.
 - The CLI is found on `PATH`, then in `~/.local/bin`, and run by the absolute
-  path it was found at.
+  path it was found at. `HAMMUNITION_UPLINK_CLI`, when set and not empty,
+  names it instead, by absolute path (for a machine where the `quectel-usbnet`
+  on `PATH` is an older one without `uplink`): that file, which must be
+  executable, or "not available", never a fallback to another. The same
+  argv (`uplink status --json`, `uplink auto`, `uplink cell-first --for D`)
+  is run against it.
+- **Network Repair** is the name front ends show for `mode` `cell-first`
+  ("Network Repair: cellular first, until HH:MM" or "no expiry"). It is a
+  label only: the mode, the verbs and every key stay as written here.
 
 ### `uplink auto`, `uplink cell-first [--for DURATION]`
 

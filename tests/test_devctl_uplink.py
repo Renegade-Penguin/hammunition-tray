@@ -341,3 +341,69 @@ def test_find_cli_looks_on_path_then_in_the_users_local_bin(
     exe.unlink()
     other.unlink()
     assert uplink.find_cli() is None
+
+
+def _exe(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\n")
+    path.chmod(0o755)
+    return path
+
+
+def test_the_cli_path_can_be_named_and_wins_over_the_older_one_on_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The real laptop: an older quectel-usbnet without `uplink` is on PATH and
+    # the manager lives in ~/.local/libexec/quectel-usbnet-uplink.
+    monkeypatch.undo()  # the autouse fake
+    old = _exe(tmp_path / "bin" / "quectel-usbnet")
+    new = _exe(tmp_path / "home" / ".local" / "libexec" / "quectel-usbnet-uplink")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("PATH", str(old.parent))
+    monkeypatch.delenv("HAMMUNITION_UPLINK_CLI", raising=False)
+    assert uplink.find_cli() == str(old)  # the default is unchanged
+    monkeypatch.setenv("HAMMUNITION_UPLINK_CLI", str(new))
+    assert uplink.find_cli() == str(new)
+
+
+@pytest.mark.parametrize("bad", ["", "quectel-usbnet-uplink", "~/x", "../x", "/no/such/cli"])
+def test_a_named_path_that_is_not_an_executable_absolute_file_is_not_available_not_a_fallback(
+    bad: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.undo()
+    on_path = _exe(tmp_path / "bin" / "quectel-usbnet")
+    monkeypatch.setenv("PATH", str(on_path.parent))
+    monkeypatch.setenv("HAMMUNITION_UPLINK_CLI", bad)
+    if bad == "":
+        # Unset and empty are the same: the default search.
+        assert uplink.find_cli() == str(on_path)
+    else:
+        assert uplink.find_cli() is None
+
+
+def test_a_named_path_that_is_a_directory_or_not_executable_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.undo()
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    plain = tmp_path / "plain"
+    plain.write_text("x")
+    plain.chmod(0o644)
+    for bad in (plain, tmp_path):
+        monkeypatch.setenv("HAMMUNITION_UPLINK_CLI", str(bad))
+        assert uplink.find_cli() is None
+
+
+def test_a_named_cli_is_what_state_and_the_switch_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.undo()
+    new = _exe(tmp_path / "libexec" / "quectel-usbnet-uplink")
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    monkeypatch.setenv("HAMMUNITION_UPLINK_CLI", str(new))
+    named = (str(new), "uplink", "status", "--json")
+    runner = FakeRunner({named: Result(0, status_doc()), (str(new), "uplink", "auto"): Result(0, "")})
+    set_runner(runner)
+    assert state(capsys)["present"] is True
+    assert main(["uplink", "auto"]) == 0
+    assert {call[0] for call in runner.calls} == {str(new)}

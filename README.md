@@ -231,17 +231,29 @@ is taller than the popup; the Qt tray's menu has a section heading per group.
   Bluetooth, from `hammunition-devctl radio state`. A radio whose tool the
   helper could not use (NetworkManager's `nmcli`, `bluetoothctl`) shows the
   helper's reason and is disabled.
+- **Network Repair**: one click, at the top of the Qt tray's menu and of the
+  Plasma popup (and in the applet icon's right-click menu), for when the
+  network is down and cellular is up. It makes cellular the main connection
+  and takes Wi-Fi and Ethernet out of the default route until you turn it off
+  or it expires (**2 hours** by default; change it under *Network Repair
+  for*). While it is on the tray icon changes (a dark disc with an amber ring
+  and four cellular bars) and its tooltip says *Network Repair: cellular
+  first, until 14:30* (or *no expiry*). Turning it on asks first, because the
+  VPN will reconnect over cellular and cellular data is metered (a question
+  with *Cancel* as the default in the Qt tray, an inline question in the
+  Plasma popup); turning it off never asks. It is the CLI's `cell-first`
+  mode under the name the owner sees; the verbs and the JSON keep the CLI's
+  name.
 - **Uplink**: which link carries your traffic. The order is always Ethernet,
-  then Wi-Fi, then cellular (**Auto**). **Cell first** puts cellular on top on
-  demand, for an emergency or a diagnosis (the LAN firewall is down, cellular
-  is up, and the VPN must stay reachable), and **Auto** puts it back. Cell
-  first lasts **2 hours** unless you pick another (30 minutes, 1, 4 or 8
+  then Wi-Fi, then cellular (**Auto**). **Network Repair** puts cellular on
+  top on demand, for an emergency or a diagnosis (the LAN firewall is down,
+  cellular is up, and the VPN must stay reachable), and **Auto** puts it back.
+  It lasts **2 hours** unless you pick another (30 minutes, 1, 4 or 8
   hours, or **No expiry**), and the group says where the routes are now
-  (*Auto: using Wi-Fi*) and, in Cell first, when it ends (*Cell first until
-  14:30*, in your local time, with the date when that is not today). Cell
-  first **uses mobile data, so it asks first** (a question with *Cancel* as
-  the default in the Qt tray, an inline question in the Plasma popup); going
-  back to Auto never asks. When `quectel-usbnet` is not installed, or fails,
+  (*Auto: using Wi-Fi*) and, in Network Repair, when it ends (*Network Repair:
+  cellular first, until 14:30*, in your local time, with the date when that
+  is not today). Network Repair **uses mobile data, so it asks first**;
+  going back to Auto never asks. When `quectel-usbnet` is not installed, or fails,
   the group says so plainly (*not available: quectel-usbnet is not
   installed*), offers nothing to press and changes nothing. It needs the
   link-priority manager from [quectel-usbnet](https://github.com/ChiefGyk3D/quectel-usbnet)
@@ -470,7 +482,7 @@ and the tray's `controls.py` required to agree word for word in three time
 zones, and the Qt tray's menu driven end to end by a fake runner. Neither
 front end has been opened on a real panel for it, the Plasma popup's new
 group has been parsed, not rendered, and it has not been run against the
-real manager: live verification (Cell first and back to Auto on the real
+real manager: live verification (Network Repair and back to Auto on the real
 machine, the expiry shown, the question on both front ends) is the owner's
 step.
 

@@ -24,7 +24,7 @@ from typing import Any
 
 from hammunition_devctl.run import run
 
-__all__ = ["DEFAULT_DURATION", "MODES", "find_cli", "read_uplink", "switch", "valid_duration"]
+__all__ = ["CLI_ENV", "DEFAULT_DURATION", "MODES", "find_cli", "read_uplink", "switch", "valid_duration"]
 
 MODES = ("auto", "cell-first")
 OWNERS = ("ethernet", "wifi", "cell", "none")
@@ -45,10 +45,21 @@ def valid_duration(text: str) -> bool:
     return _DURATION.fullmatch(text) is not None
 
 
+CLI_ENV = "HAMMUNITION_UPLINK_CLI"
+"""Names the CLI by absolute path, for a machine where the manager is not
+``quectel-usbnet`` on ``PATH`` (an older one there has no ``uplink``). Unset
+or empty: the search below, unchanged. Set: that file or nothing, never a
+fallback to another one, so a typo cannot quietly run something else."""
+
+
 def find_cli() -> str | None:
-    """The absolute path of the CLI, or None. ``PATH`` first, then the
-    account's ``~/.local/bin``: a panel or a service manager often starts a
-    tray without it on ``PATH``."""
+    """The absolute path of the CLI, or None. ``HAMMUNITION_UPLINK_CLI`` if it
+    is set; else ``PATH``, then the account's ``~/.local/bin``: a panel or a
+    service manager often starts a tray without it on ``PATH``."""
+    named = os.environ.get(CLI_ENV, "")
+    if named:
+        ok = os.path.isabs(named) and os.path.isfile(named) and os.access(named, os.X_OK)
+        return named if ok else None
     found = shutil.which(CLI_NAME)
     if found:
         return found

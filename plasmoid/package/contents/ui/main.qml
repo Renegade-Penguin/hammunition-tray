@@ -82,9 +82,9 @@ PlasmoidItem {
     // The Uplink control (`uplink state`, controlslogic.js): the row its poll
     // returned (null until the first answer), a flag for a helper without the
     // verb, and its own error. `uplinkDuration` is how long the next Cell
-    // first lasts, the operator's choice and 2 h until they change it.
+    // Repair lasts, the operator's choice and 2 h until they change it.
     // `uplinkConfirming` is the mode waiting for a yes ("" when no question
-    // is open): Cell first uses mobile data and is never run before it.
+    // is open): Network Repair uses mobile data and is never run before it.
     property var uplinkRow: null
     property bool uplinkUnsupported: false
     property string uplinkError: ""
@@ -114,6 +114,10 @@ PlasmoidItem {
     readonly property var effectiveServices: effectiveServicesRows()
     readonly property var effectiveRadios: effectiveRadiosRows()
     readonly property var effectiveUplink: effectiveUplinkRow()
+
+    // Network Repair (the CLI's cell-first) is on, as drawn: a request just
+    // made counts at once. Decides the icon, the tooltip and the panel status.
+    readonly property bool repairActive: effectiveUplink !== null && Controls.repairActive(effectiveUplink)
 
     function effectiveServicesRows() {
         if (servicesRows === null) {
@@ -301,8 +305,8 @@ PlasmoidItem {
         runControl(words, Controls.radioPending(row.name, on));
     }
 
-    // Uplink: Auto or Cell first, always direct (the manager runs as the user,
-    // so never pkexec or sudo). Cell first asks first: the question is
+    // Uplink: Auto or Network Repair, always direct (the manager runs as the user,
+    // so never pkexec or sudo). Network Repair asks first: the question is
     // `uplinkConfirming`, answered by confirmUplink() or cancelUplink().
     function setUplink(mode) {
         if (acting || effectiveUplink === null) return;
@@ -339,11 +343,21 @@ PlasmoidItem {
         runControl(words, Controls.uplinkPending(mode));
     }
 
-    // Only the choice for the next Cell first: nothing runs.
+    // Only the choice for the next Network Repair: nothing runs.
     function setUplinkDuration(value) {
         if (acting) return;
         if (Controls.UPLINK_DURATIONS.some(d => d[0] === value))
             uplinkDuration = value;
+    }
+
+    // The one click: Network Repair off when it is on, else on (which asks
+    // first, in the popup, so the popup is opened to show the question).
+    function toggleRepair() {
+        if (acting || effectiveUplink === null) return;
+        if (!Controls.repairEnabled(effectiveUplink, acting)) return;
+        const next = Controls.repairNextMode(effectiveUplink);
+        if (Controls.uplinkNeedsConfirm(next)) expanded = true;
+        setUplink(next);
     }
 
     // A failed verb takes back exactly the request it added.
@@ -519,7 +533,9 @@ PlasmoidItem {
         onTriggered: root.refresh()
     }
 
-    Plasmoid.status: root.anyParked
+    // Active while Network Repair is on, so the icon stays in the tray proper
+    // and not in the hidden overflow, where the owner cannot see it.
+    Plasmoid.status: root.anyParked || root.repairActive
         ? PlasmaCore.Types.ActiveStatus
         : PlasmaCore.Types.PassiveStatus
 
@@ -531,8 +547,22 @@ PlasmoidItem {
         else if (devices.length === 0) text = i18n("No parkable device is attached");
         else text = i18np("%1 device parked", "%1 devices parked", parkedCount);
         const rtc = TimeLogic.rtcNote(timeState, root.tr);
-        return rtc !== "" ? text + "\n" + rtc : text;
+        if (rtc !== "") text = text + "\n" + rtc;
+        const repair = effectiveUplink === null ? "" : Controls.repairTooltip(effectiveUplink, Date.now() / 1000, root.tr);
+        return repair !== "" ? text + "\n" + repair : text;
     }
+
+    // Right-click on the icon: Network Repair, one click, with a check while
+    // it is on. Always present; disabled while the uplink is not available.
+    Plasmoid.contextualActions: [
+        PlasmaCore.Action {
+            text: root.controlStrings.repair_label
+            checkable: true
+            checked: root.repairActive
+            enabled: root.effectiveUplink !== null && Controls.repairEnabled(root.effectiveUplink, root.acting)
+            onTriggered: root.toggleRepair()
+        }
+    ]
 
     compactRepresentation: CompactRepresentation {}
     fullRepresentation: FullRepresentation {}

@@ -46,6 +46,70 @@ PlasmaExtras.Representation {
             width: scroll.availableWidth
             spacing: Kirigami.Units.smallSpacing
 
+            // Network Repair, first thing in the popup: one button that makes
+            // cellular the main connection (and puts it back). Turning it on
+            // asks first, right here, because mobile data is metered; turning
+            // it off never asks. The same action is in the icon's right-click
+            // menu. controlslogic.js has every rule and sentence.
+            ColumnLayout {
+                Layout.fillWidth: true
+                visible: !root.helperMissing
+                spacing: Kirigami.Units.smallSpacing
+
+                PlasmaComponents.Button {
+                    Layout.fillWidth: true
+                    text: root.controlStrings.repair_label
+                    checkable: true
+                    checked: root.repairActive
+                    highlighted: root.repairActive
+                    enabled: root.effectiveUplink !== null && Controls.repairEnabled(root.effectiveUplink, root.acting)
+                    onClicked: {
+                        // Rebound, so a declined question leaves the truth checked.
+                        checked = Qt.binding(() => root.repairActive);
+                        root.toggleRepair();
+                    }
+                }
+
+                PlasmaComponents.Label {
+                    Layout.fillWidth: true
+                    visible: root.repairActive
+                    wrapMode: Text.WordWrap
+                    text: root.effectiveUplink === null ? "" : Controls.repairTooltip(root.effectiveUplink, Date.now() / 1000, root.tr)
+                }
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    visible: root.uplinkConfirming !== ""
+                    spacing: Kirigami.Units.smallSpacing
+
+                    PlasmaComponents.Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        text: Controls.uplinkConfirmText(root.uplinkDuration, root.tr)
+                    }
+
+                    RowLayout {
+                        spacing: Kirigami.Units.smallSpacing
+
+                        PlasmaComponents.Button {
+                            text: root.controlStrings.uplink_confirm_yes
+                            enabled: !root.acting
+                            onClicked: root.confirmUplink()
+                        }
+
+                        PlasmaComponents.Button {
+                            text: root.controlStrings.uplink_confirm_no
+                            onClicked: root.cancelUplink()
+                        }
+                    }
+                }
+            }
+
+            Kirigami.Separator {
+                Layout.fillWidth: true
+                visible: !root.helperMissing
+            }
+
             // The Controls panel's first group: today's rows, unchanged.
             PlasmaExtras.Heading {
                 Layout.fillWidth: true
@@ -348,8 +412,8 @@ PlasmaExtras.Representation {
             }
 
             // The Uplink group: which link owns the default routes. Auto is
-            // Ethernet, then Wi-Fi, then cellular; Cell first puts cellular on
-            // top for an emergency or a diagnosis, until it expires. Cell first
+            // Ethernet, then Wi-Fi, then cellular; Network Repair puts cellular on
+            // top for an emergency or a diagnosis, until it expires. Network Repair
             // uses mobile data, so it asks first (an inline question, not a
             // dialog: a dialog can close the popup under it). Always direct,
             // never pkexec or sudo. controlslogic.js has every rule and sentence.
@@ -380,7 +444,7 @@ PlasmaExtras.Representation {
                 text: root.controlStrings.reading_uplink
             }
 
-            // Where the routes are, and when Cell first ends; or why the
+            // Where the routes are, and when Network Repair ends; or why the
             // control is not available, plainly, with nothing to press.
             PlasmaComponents.Label {
                 Layout.fillWidth: true
