@@ -16,7 +16,8 @@ that is the difference between a GNSS receiver drawing power all day and
 drawing none, without unplugging anything.
 
 **A Controls panel** also switches the GPS services and the machine's radios,
-beside the device switches: [below](#the-controls-panel).
+beside the device switches, and has an **Uplink** control that puts cellular
+ahead of Ethernet and Wi-Fi for an emergency: [below](#the-controls-panel).
 
 **A Time section** shows what the clock follows and sets the mode of
 Hammunition's GPS time (its D-058) — [below](#the-time-section).
@@ -132,6 +133,9 @@ What it does:
   the same polkit action.
 - `radio state` and `radio on|off wwan|wifi|bluetooth`: your own session's
   switches, through `nmcli` and `bluetoothctl`, no root.
+- `uplink state`, `uplink auto` and `uplink cell-first [--for DURATION]`:
+  which link owns the default routes, through the `quectel-usbnet uplink`
+  CLI (the link-priority manager, which runs as you), no root, no pkexec.
 
 What it never does: run a command whose words come from its arguments. Every
 verb has a fixed argv; a service is found by name in an allow-list file the
@@ -206,7 +210,7 @@ reads for it.
 
 ## The Controls panel
 
-One panel, three groups, worded identically in the Plasma applet and in the
+One panel, four groups, worded identically in the Plasma applet and in the
 Qt tray (a test holds them to it). The Plasma applet scrolls when the panel
 is taller than the popup; the Qt tray's menu has a section heading per group.
 
@@ -227,10 +231,37 @@ is taller than the popup; the Qt tray's menu has a section heading per group.
   Bluetooth, from `hammunition-devctl radio state`. A radio whose tool the
   helper could not use (NetworkManager's `nmcli`, `bluetoothctl`) shows the
   helper's reason and is disabled.
+- **Network Repair**: one click, at the top of the Qt tray's menu and of the
+  Plasma popup (and in the applet icon's right-click menu), for when the
+  network is down and cellular is up. It makes cellular the main connection
+  and takes Wi-Fi and Ethernet out of the default route until you turn it off
+  or it expires (**2 hours** by default; change it under *Network Repair
+  for*). While it is on the tray icon changes (a dark disc with an amber ring
+  and four cellular bars) and its tooltip says *Network Repair: cellular
+  first, until 14:30* (or *no expiry*). Turning it on asks first, because the
+  VPN will reconnect over cellular and cellular data is metered (a question
+  with *Cancel* as the default in the Qt tray, an inline question in the
+  Plasma popup); turning it off never asks. It is the CLI's `cell-first`
+  mode under the name the owner sees; the verbs and the JSON keep the CLI's
+  name.
+- **Uplink**: which link carries your traffic. The order is always Ethernet,
+  then Wi-Fi, then cellular (**Auto**). **Network Repair** puts cellular on
+  top on demand, for an emergency or a diagnosis (the LAN firewall is down,
+  cellular is up, and the VPN must stay reachable), and **Auto** puts it back.
+  It lasts **2 hours** unless you pick another (30 minutes, 1, 4 or 8
+  hours, or **No expiry**), and the group says where the routes are now
+  (*Auto: using Wi-Fi*) and, in Network Repair, when it ends (*Network Repair:
+  cellular first, until 14:30*, in your local time, with the date when that
+  is not today). Network Repair **uses mobile data, so it asks first**;
+  going back to Auto never asks. When `quectel-usbnet` is not installed, or fails,
+  the group says so plainly (*not available: quectel-usbnet is not
+  installed*), offers nothing to press and changes nothing. It needs the
+  link-priority manager from [quectel-usbnet](https://github.com/ChiefGyk3D/quectel-usbnet)
+  (its issue 25); until that lands the group just says it is not available.
 
 **Which switch asks for a password.** Reading is never privileged: every
-tick (5 s by default) runs `state`, `time state`, `services state` and
-`radio state` directly, with no prompt. Changing:
+tick (5 s by default) runs `state`, `time state`, `services state`,
+`radio state` and `uplink state` directly, with no prompt. Changing:
 
 | switch | runs | prompt |
 |---|---|---|
@@ -239,12 +270,14 @@ tick (5 s by default) runs `state`, `time state`, `services state` and
 | a **system** service (running or login) | `/usr/bin/pkexec HELPER services start\|stop\|enable\|disable NAME` | one, the same polkit action |
 | a **user** service (running or login) | `HELPER services start\|stop\|enable\|disable NAME` | none: `systemctl --user` as you |
 | a radio | `HELPER radio on\|off wwan\|wifi\|bluetooth` | none: polkit already lets an active session do it |
+| the uplink | `HELPER uplink auto` or `HELPER uplink cell-first --for DURATION` | none: the manager runs as you; never pkexec or sudo |
 
 `HELPER` is `/usr/local/libexec/hammunition-devctl`. A service's scope comes
 from its row, and a name must have the shape the helper accepts
 (`[a-z0-9][a-z0-9-]{0,63}`) or it never reaches a command; the Plasma applet
 builds a shell string, so that check is the one that matters there. Only the
-four verbs, and only the three radios, can be sent.
+four verbs, and only the three radios, can be sent; for the uplink, only the
+two modes and the six durations the tray offers.
 
 **What a switch does when you use it.** It moves at once, to what you asked
 for. The next poll replaces that with what the helper really reports, so a
@@ -441,6 +474,17 @@ verifies on a pull request that touches the packaging and never publishes
 there; the Parrot mirror's availability is not a merge gate.
 
 ## Status
+
+Unreleased. **The Uplink control** is tested against a fake of the
+`quectel-usbnet uplink` CLI contract (a stateful stand-in under
+`tests/fakes/`, plus argv-keyed fakes), with the applet's `controlslogic.js`
+and the tray's `controls.py` required to agree word for word in three time
+zones, and the Qt tray's menu driven end to end by a fake runner. Neither
+front end has been opened on a real panel for it, the Plasma popup's new
+group has been parsed, not rendered, and it has not been run against the
+real manager: live verification (Network Repair and back to Auto on the real
+machine, the expiry shown, the question on both front ends) is the owner's
+step.
 
 0.5.0. **The Controls panel and the helper's move here** is tested against fake helper
 documents for every state of a service and a radio, with the applet's

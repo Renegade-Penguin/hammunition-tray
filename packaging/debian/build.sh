@@ -88,7 +88,7 @@ install -m 0644 "$repo/qt/hammunition-tray-qt-autostart.desktop" \
     "$qstage/etc/xdg/autostart/hammunition-tray-qt.desktop"
 # Distinct names from the applet's hammunition-devices, so the two packages
 # never own the same file and either installs without the other.
-for state in awake parked; do
+for state in awake parked repair; do
     install -m 0644 "$repo/plasmoid/package/contents/icons/hammunition-devices-$state.svg" \
         "$qicons/hammunition-tray-qt-$state.svg"
 done

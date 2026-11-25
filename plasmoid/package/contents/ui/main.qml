@@ -79,6 +79,18 @@ PlasmoidItem {
     property bool radiosUnsupported: false
     property string radiosError: ""
 
+    // The Uplink control (`uplink state`, controlslogic.js): the row its poll
+    // returned (null until the first answer), a flag for a helper without the
+    // verb, and its own error. `uplinkDuration` is how long the next Cell
+    // Repair lasts, the operator's choice and 2 h until they change it.
+    // `uplinkConfirming` is the mode waiting for a yes ("" when no question
+    // is open): Network Repair uses mobile data and is never run before it.
+    property var uplinkRow: null
+    property bool uplinkUnsupported: false
+    property string uplinkError: ""
+    property string uplinkDuration: Controls.UPLINK_DEFAULT_DURATION
+    property string uplinkConfirming: ""
+
     // What the operator just asked for and no poll has confirmed: shown at
     // once, replaced by the next poll, dropped if the verb fails.
     // controlslogic.js has the keys; `inflight` is the key the running verb
@@ -95,11 +107,17 @@ PlasmoidItem {
 
     property var effectiveServicesCache: null
     property var effectiveRadiosCache: null
+    property var effectiveUplinkCache: null
 
     // The rows as they should be drawn: the helper's, with the pending
     // requests applied.
     readonly property var effectiveServices: effectiveServicesRows()
     readonly property var effectiveRadios: effectiveRadiosRows()
+    readonly property var effectiveUplink: effectiveUplinkRow()
+
+    // Network Repair (the CLI's cell-first) is on, as drawn: a request just
+    // made counts at once. Decides the icon, the tooltip and the panel status.
+    readonly property bool repairActive: effectiveUplink !== null && Controls.repairActive(effectiveUplink)
 
     function effectiveServicesRows() {
         if (servicesRows === null) {
@@ -121,6 +139,17 @@ PlasmoidItem {
         if (!Controls.sameRows(effectiveRadiosCache, next))
             effectiveRadiosCache = next;
         return effectiveRadiosCache;
+    }
+
+    function effectiveUplinkRow() {
+        if (uplinkRow === null) {
+            effectiveUplinkCache = null;
+            return null;
+        }
+        const next = Controls.effectiveUplink(uplinkRow, pending);
+        if (!Controls.sameRows(effectiveUplinkCache, next))
+            effectiveUplinkCache = next;
+        return effectiveUplinkCache;
     }
 
     // The panel's fixed sentences, from the one table the parity test pins.
@@ -177,13 +206,14 @@ PlasmoidItem {
     // Neither read needs privilege -- reading sysfs and asking ntpq do not,
     // only writing does -- so the poll runs the helper directly and no prompt
     // appears for either.
-    // All four documents on every tick: the devices, the clock, the services
-    // and the radios. None of them needs privilege.
+    // All five documents on every tick: the devices, the clock, the services,
+    // the radios and the uplink. None of them needs privilege.
     function refresh() {
         exec.run(helper + " state");
         exec.run(helper + " time state");
         startPoll("services", helper + " services state");
         startPoll("radios", helper + " radio state");
+        startPoll("uplink", helper + " uplink state");
     }
 
     // The epoch a services or radios poll started in, unless one is already
@@ -275,6 +305,61 @@ PlasmoidItem {
         runControl(words, Controls.radioPending(row.name, on));
     }
 
+    // Uplink: Auto or Network Repair, always direct (the manager runs as the user,
+    // so never pkexec or sudo). Network Repair asks first: the question is
+    // `uplinkConfirming`, answered by confirmUplink() or cancelUplink().
+    function setUplink(mode) {
+        if (acting || effectiveUplink === null) return;
+        if (!Controls.uplinkEnabled(effectiveUplink, acting)) return;
+        if (Controls.uplinkChecked(effectiveUplink, mode)) return;
+        if (Controls.uplinkNeedsConfirm(mode)) {
+            uplinkConfirming = mode;
+            return;
+        }
+        uplinkConfirming = "";
+        runUplink(mode);
+    }
+
+    function confirmUplink() {
+        const mode = uplinkConfirming;
+        uplinkConfirming = "";
+        if (mode !== "" && effectiveUplink !== null && Controls.uplinkEnabled(effectiveUplink, acting))
+            runUplink(mode);
+    }
+
+    function cancelUplink() {
+        uplinkConfirming = "";
+    }
+
+    function runUplink(mode) {
+        if (acting) return;
+        let words;
+        try {
+            words = Controls.uplinkArgv(helper, mode, uplinkDuration);
+        } catch (e) {
+            actionError = e.message;
+            return;
+        }
+        runControl(words, Controls.uplinkPending(mode));
+    }
+
+    // Only the choice for the next Network Repair: nothing runs.
+    function setUplinkDuration(value) {
+        if (acting) return;
+        if (Controls.UPLINK_DURATIONS.some(d => d[0] === value))
+            uplinkDuration = value;
+    }
+
+    // The one click: Network Repair off when it is on, else on (which asks
+    // first, in the popup, so the popup is opened to show the question).
+    function toggleRepair() {
+        if (acting || effectiveUplink === null) return;
+        if (!Controls.repairEnabled(effectiveUplink, acting)) return;
+        const next = Controls.repairNextMode(effectiveUplink);
+        if (Controls.uplinkNeedsConfirm(next)) expanded = true;
+        setUplink(next);
+    }
+
     // A failed verb takes back exactly the request it added.
     function dropInflight() {
         const next = {};
@@ -323,30 +408,41 @@ PlasmoidItem {
             return;
         }
 
-        if (kind === "services" || kind === "radios") {
+        if (kind === "services" || kind === "radios" || kind === "uplink") {
             const out = Controls.pollOutcome(kind, code, stdout, stderr, root.tr);
             const isServices = kind === "services";
+            const isUplink = kind === "uplink";
             const started = pollEpoch.hasOwnProperty(kind) ? pollEpoch[kind] : null;
             delete pollEpoch[kind];
             // A poll that was running before a verb began, or lands while one
             // runs, must not take the request off the screen. Any poll that
             // started after the last verb ended is the truth, a failed one
             // included.
-            if (Controls.pendingFresh(started, epoch, acting)) dropPending(isServices ? "service:" : "radio:");
+            if (Controls.pendingFresh(started, epoch, acting))
+                dropPending(isServices ? "service:" : (isUplink ? "uplink:" : "radio:"));
             // It began before a verb ended: ask again, so the confirmation
             // does not wait for the next tick.
             if (started !== null && started !== epoch)
-                startPoll(kind, helper + (isServices ? " services state" : " radio state"));
+                startPoll(kind, helper + (isServices ? " services state" : (isUplink ? " uplink state" : " radio state")));
             if (out.keep) {
-                if (isServices) servicesError = out.error; else radiosError = out.error;
+                if (isServices) servicesError = out.error;
+                else if (isUplink) uplinkError = out.error;
+                else radiosError = out.error;
                 return;
             }
             // No helper: the device poll says so, this group changes nothing.
             if (out.doc === null && !out.unsupported) {
-                if (isServices) servicesError = ""; else radiosError = "";
+                if (isServices) servicesError = "";
+                else if (isUplink) uplinkError = "";
+                else radiosError = "";
                 return;
             }
-            if (isServices) {
+            if (isUplink) {
+                if (!Controls.sameRows(uplinkRow, out.doc))
+                    uplinkRow = out.doc;
+                uplinkUnsupported = out.unsupported;
+                uplinkError = out.error;
+            } else if (isServices) {
                 const nextServicesRows = out.doc === null ? null : out.doc.rows;
                 if (!Controls.sameRows(servicesRows, nextServicesRows))
                     servicesRows = nextServicesRows;
@@ -437,7 +533,9 @@ PlasmoidItem {
         onTriggered: root.refresh()
     }
 
-    Plasmoid.status: root.anyParked
+    // Active while Network Repair is on, so the icon stays in the tray proper
+    // and not in the hidden overflow, where the owner cannot see it.
+    Plasmoid.status: root.anyParked || root.repairActive
         ? PlasmaCore.Types.ActiveStatus
         : PlasmaCore.Types.PassiveStatus
 
@@ -449,8 +547,22 @@ PlasmoidItem {
         else if (devices.length === 0) text = i18n("No parkable device is attached");
         else text = i18np("%1 device parked", "%1 devices parked", parkedCount);
         const rtc = TimeLogic.rtcNote(timeState, root.tr);
-        return rtc !== "" ? text + "\n" + rtc : text;
+        if (rtc !== "") text = text + "\n" + rtc;
+        const repair = effectiveUplink === null ? "" : Controls.repairTooltip(effectiveUplink, Date.now() / 1000, root.tr);
+        return repair !== "" ? text + "\n" + repair : text;
     }
+
+    // Right-click on the icon: Network Repair, one click, with a check while
+    // it is on. Always present; disabled while the uplink is not available.
+    Plasmoid.contextualActions: [
+        PlasmaCore.Action {
+            text: root.controlStrings.repair_label
+            checkable: true
+            checked: root.repairActive
+            enabled: root.effectiveUplink !== null && Controls.repairEnabled(root.effectiveUplink, root.acting)
+            onTriggered: root.toggleRepair()
+        }
+    ]
 
     compactRepresentation: CompactRepresentation {}
     fullRepresentation: FullRepresentation {}

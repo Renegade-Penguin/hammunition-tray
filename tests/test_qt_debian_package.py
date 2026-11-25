@@ -87,6 +87,7 @@ class QtDebianPackage(unittest.TestCase):
             AUTOSTART,
             "usr/share/icons/hicolor/scalable/apps/hammunition-tray-qt-awake.svg",
             "usr/share/icons/hicolor/scalable/apps/hammunition-tray-qt-parked.svg",
+            "usr/share/icons/hicolor/scalable/apps/hammunition-tray-qt-repair.svg",
             "usr/share/doc/hammunition-tray-qt/copyright",
             "usr/share/doc/hammunition-tray-qt/README.md",
         }
@@ -107,10 +108,10 @@ class QtDebianPackage(unittest.TestCase):
                 want = "-rw-r--r--"
             self.assertEqual(mode, want, line)
 
-    def test_the_icons_are_the_applets_two(self):
+    def test_the_icons_are_the_applets_three(self):
         icons = ROOT / "plasmoid/package/contents/icons"
         apps = self.tree / "usr/share/icons/hicolor/scalable/apps"
-        for state in ("awake", "parked"):
+        for state in ("awake", "parked", "repair"):
             self.assertEqual(
                 (apps / f"hammunition-tray-qt-{state}.svg").read_bytes(),
                 (icons / f"hammunition-devices-{state}.svg").read_bytes(),

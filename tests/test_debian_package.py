@@ -15,6 +15,7 @@ APPLET_FILES = {
     "contents/config/main.xml",
     "contents/icons/hammunition-devices-awake.svg",
     "contents/icons/hammunition-devices-parked.svg",
+    "contents/icons/hammunition-devices-repair.svg",
     "contents/ui/CompactRepresentation.qml",
     "contents/ui/FullRepresentation.qml",
     "contents/ui/configGeneral.qml",

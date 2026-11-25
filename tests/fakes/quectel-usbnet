@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""A fake of the quectel-usbnet CLI contract (ChiefGyk3D/quectel-usbnet, issue 25).
+
+Only the three uplink verbs the tray calls. It keeps its mode in the file named
+by FAKE_UPLINK_STATE and changes nothing else: no network, no nmcli, no routes.
+FAKE_UPLINK_FAIL makes every verb exit 1 with that sentence on stderr.
+"""
+
+import json
+import os
+import re
+import sys
+from datetime import datetime, timedelta, timezone
+
+state_file = os.environ["FAKE_UPLINK_STATE"]
+fail = os.environ.get("FAKE_UPLINK_FAIL")
+args = sys.argv[1:]
+
+
+def load():
+    try:
+        with open(state_file) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {"mode": "auto", "until": None}
+
+
+def save(state):
+    with open(state_file, "w") as f:
+        json.dump(state, f)
+
+
+if fail:
+    print(fail, file=sys.stderr)
+    sys.exit(1)
+if args[:2] == ["uplink", "status"] and args[2:] == ["--json"]:
+    s = load()
+    print(json.dumps({
+        "mode": s["mode"],
+        "owner": "cell" if s["mode"] == "cell-first" else "wifi",
+        "links": {"ethernet": {"state": "absent", "healthy": False},
+                  "wifi": {"state": "up", "healthy": True},
+                  "cell": {"state": "up", "healthy": True}},
+        "until": s["until"],
+        "since": "2026-11-24T10:00:00Z",
+    }))
+elif args == ["uplink", "auto"]:
+    save({"mode": "auto", "until": None})
+elif args[:2] == ["uplink", "cell-first"]:
+    duration = "2h"
+    if args[2:3] == ["--for"] and len(args) == 4:
+        duration = args[3]
+    elif len(args) != 2:
+        print("error: usage", file=sys.stderr)
+        sys.exit(2)
+    m = re.fullmatch(r"(0|([1-9][0-9]*)([mh]))", duration)
+    if not m:
+        print("error: bad duration", file=sys.stderr)
+        sys.exit(2)
+    until = None
+    if duration != "0":
+        n, unit = int(m.group(2)), m.group(3)
+        delta = timedelta(minutes=n) if unit == "m" else timedelta(hours=n)
+        until = (datetime.now(timezone.utc) + delta).strftime("%Y-%m-%dT%H:%M:%SZ")
+    save({"mode": "cell-first", "until": until})
+else:
+    print("error: unknown verb", file=sys.stderr)
+    sys.exit(2)

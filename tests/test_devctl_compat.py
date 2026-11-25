@@ -137,12 +137,37 @@ def test_every_argv_the_qt_tray_builds_is_accepted_by_this_helper(
         assert main(words) == 0, words
 
 
+def test_every_uplink_argv_the_qt_tray_builds_is_accepted_by_this_helper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The tray's own uplink argv, every mode and every duration it offers,
+    parsed by the helper's parser; the action itself is stubbed."""
+    sys.path.insert(0, str(ROOT / "qt"))
+    from hammunition_tray_qt import controls, logic
+
+    seen: list[tuple[str, str | None]] = []
+    monkeypatch.setattr(devctl, "_uplink_state", lambda: 0)
+    monkeypatch.setattr(devctl, "_uplink_switch", lambda mode, duration: seen.append((mode, duration)) or 0)
+    built = [logic.uplink_poll_argv()]
+    built += [controls.uplink_argv(logic.HELPER, "auto", "2h")]
+    built += [controls.uplink_argv(logic.HELPER, "cell-first", d) for d, _ in controls.UPLINK_DURATIONS]
+    assert len(built) == 8
+    for program, args in built:
+        assert program == logic.HELPER
+        assert main(list(args)) == 0, args
+    assert seen[0] == ("auto", None)
+    assert [d for _, d in seen[1:]] == [d for d, _ in controls.UPLINK_DURATIONS]
+    from hammunition_devctl import uplink
+
+    assert all(uplink.valid_duration(d) for d, _ in controls.UPLINK_DURATIONS)
+
+
 def test_the_applet_names_only_verbs_the_helper_still_has() -> None:
     qml = (ROOT / "plasmoid/package/contents/ui/main.qml").read_text()
     verbs = set(re.findall(r'helper \+ " ([a-z]+)', qml))
     verbs |= set(re.findall(r'\? "(park|wake) "', qml))
     assert {"state", "time", "park", "wake"} <= verbs
-    assert verbs <= {"state", "time", "park", "wake", "linger", "services", "radio"}
+    assert verbs <= {"state", "time", "park", "wake", "linger", "services", "radio", "uplink"}
 
 
 def test_version_prints_the_contract_number_and_the_contract_file_agrees(
@@ -172,6 +197,9 @@ def test_the_contract_file_documents_every_verb_the_parser_has() -> None:
         "services start|stop|enable|disable",
         "radio state",
         "radio on|off",
+        "uplink state",
+        "uplink auto",
+        "uplink cell-first",
         "--version",
     ):
         assert verb in text, verb

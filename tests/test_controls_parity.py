@@ -19,6 +19,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -26,7 +27,15 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "qt"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from controls_fixtures import RADIOS, RADIOS_POLLS, SERVICES, SERVICES_POLLS  # noqa: E402
+from controls_fixtures import (  # noqa: E402
+    RADIOS,
+    RADIOS_POLLS,
+    SERVICES,
+    SERVICES_POLLS,
+    UPLINK_NOW,
+    UPLINK_POLLS,
+    UPLINKS,
+)
 from hammunition_tray_qt import controls  # noqa: E402
 
 UI = ROOT / "plasmoid/package/contents/ui"
@@ -172,6 +181,15 @@ SOURCES = {
     f"{HELPER} services stop gps-tether": "control",
     f"{HELPER} services enable gps-tether": "control",
     f"{HELPER} radio off wwan": "control",
+    f"{HELPER} uplink state": "uplink",
+    f"{HELPER} uplink auto": "control",
+    f"{HELPER} uplink cell-first --for 2h": "control",
+    f"{HELPER} uplink cell-first --for 0": "control",
+    # A service named for a verb or a group: nothing in a name may change
+    # which parser reads the answer.
+    f"{HELPER} services start uplink": "control",
+    f"{HELPER} services stop auto": "control",
+    f"{HELPER} services start cell-first": "control",
     # A service is named by its owner: nothing in a name may change which
     # parser reads the answer. These all end in or contain " state".
     f"{HELPER} services start state": "control",
@@ -380,6 +398,226 @@ class Parity(unittest.TestCase):
         main = (UI / "main.qml").read_text()
         self.assertIn("TimeLogic.sourceKind(source)", main)
         self.assertNotIn('source.indexOf(" state")', main)
+
+
+UPLINK_HARNESS = r"""
+const fs = require("fs");
+const vm = require("vm");
+const L = {};
+vm.createContext(L);
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8").replace(/^\.pragma library\s*$/m, ""), L,
+                { filename: process.argv[1] });
+const tr = (m, ...a) => m.replace(/%(\d)/g, (_, n) => String(a[Number(n) - 1]));
+const input = JSON.parse(fs.readFileSync(0, "utf8"));
+const out = {
+  modes: Array.from(L.UPLINK_MODES),
+  durations: L.UPLINK_DURATIONS.map(d => Array.from(d)),
+  defaultDuration: L.UPLINK_DEFAULT_DURATION,
+  docs: {}, polls: {}, argv: [], confirm: {}, needs: {}, labels: {},
+};
+for (const [name, doc] of Object.entries(input.docs)) {
+  const r = L.parseUplink(JSON.stringify(doc));
+  out.docs[name] = {
+    row: r,
+    indicator: L.uplinkIndicator(r, input.now, tr),
+    checked: input.modes.map(m => L.uplinkChecked(r, m)),
+    enabled: [L.uplinkEnabled(r, false), L.uplinkEnabled(r, true)],
+    durationEnabled: [L.uplinkDurationEnabled(r, false), L.uplinkDurationEnabled(r, true)],
+    effective: input.modes.map(m => {
+      const e = L.effectiveUplink(r, { "uplink:mode": m });
+      return { row: e, indicator: L.uplinkIndicator(e, input.now, tr) };
+    }),
+    untouched: L.effectiveUplink(r, {}),
+  };
+}
+for (const [name, [code, stdout, stderr]] of Object.entries(input.polls)) {
+  out.polls[name] = L.pollOutcome("uplink", code, stdout, stderr, tr);
+}
+for (const c of input.argv) {
+  try { out.argv.push({ ok: Array.from(L.uplinkArgv(c.helper, c.mode, c.duration)) }); }
+  catch (e) { out.argv.push({ refused: true }); }
+}
+out.repair = {};
+for (const [name, doc] of Object.entries(input.docs)) {
+  const r = L.parseUplink(JSON.stringify(doc));
+  out.repair[name] = {
+    active: L.repairActive(r),
+    next: L.repairNextMode(r),
+    enabled: [L.repairEnabled(r, false), L.repairEnabled(r, true)],
+    tooltip: L.repairTooltip(r, input.now, tr),
+    pendingOn: L.repairActive(L.effectiveUplink(r, { "uplink:mode": "cell-first" })),
+    pendingOff: L.repairActive(L.effectiveUplink(r, { "uplink:mode": "auto" })),
+  };
+}
+for (const [value] of L.UPLINK_DURATIONS) out.confirm[value] = L.uplinkConfirmText(value, tr);
+for (const m of input.modes) { out.needs[m] = L.uplinkNeedsConfirm(m); out.labels[m] = L.uplinkModeLabel(m, tr); }
+out.durationLabels = Object.fromEntries(L.UPLINK_DURATIONS.map(([v]) => [v, L.uplinkDurationLabel(v, tr)]));
+out.pendingKey = L.uplinkPending("cell-first");
+out.pollArgv = L.uplinkPollArgv(input.helper);
+process.stdout.write(JSON.stringify(out));
+"""
+
+UPLINK_ARGV_CASES = [
+    {"helper": HELPER, "mode": m, "duration": d}
+    for m in ("auto", "cell-first", "turbo", "", "auto;id", "Auto")
+    for d in ("30m", "1h", "2h", "4h", "8h", "0", "", "3h", "2h;id", "0h", "$(id)", "2h ", "99999h")
+]
+
+ZONES = ("UTC", "America/New_York", "Asia/Kolkata")
+
+
+@unittest.skipIf(NODE is None, "node is not installed; install nodejs to run this")
+class UplinkParity(unittest.TestCase):
+    """controlslogic.js's Uplink rules against controls.py, in more than one
+    time zone: the expiry is shown in the operator's local time."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.js = {}
+        payload = json.dumps(
+            {
+                "docs": UPLINKS,
+                "polls": UPLINK_POLLS,
+                "argv": UPLINK_ARGV_CASES,
+                "modes": list(controls.UPLINK_MODES),
+                "now": UPLINK_NOW,
+                "helper": HELPER,
+            }
+        )
+        for zone in ZONES:
+            p = subprocess.run(
+                [NODE, "-e", UPLINK_HARNESS, str(JS)],
+                input=payload, capture_output=True, text=True, timeout=60,
+                env={**os.environ, "TZ": zone},
+            )
+            if p.returncode != 0:
+                raise AssertionError(f"controlslogic.js failed under node in {zone}:\n{p.stderr}")
+            cls.js[zone] = json.loads(p.stdout)
+
+    def in_zone(self, zone):
+        old = os.environ.get("TZ")
+
+        def restore():
+            if old is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = old
+            time.tzset()
+
+        os.environ["TZ"] = zone
+        time.tzset()
+        self.addCleanup(restore)
+
+    def test_the_closed_lists_and_labels(self):
+        js = self.js["UTC"]
+        self.assertEqual(js["modes"], list(controls.UPLINK_MODES))
+        self.assertEqual(js["durations"], [list(d) for d in controls.UPLINK_DURATIONS])
+        self.assertEqual(js["defaultDuration"], controls.UPLINK_DEFAULT_DURATION)
+        for mode in controls.UPLINK_MODES:
+            self.assertEqual(js["labels"][mode], controls.uplink_mode_label(mode))
+            self.assertEqual(js["needs"][mode], controls.uplink_needs_confirm(mode))
+        for value, _ in controls.UPLINK_DURATIONS:
+            self.assertEqual(js["durationLabels"][value], controls.uplink_duration_label(value))
+            self.assertEqual(js["confirm"][value], controls.uplink_confirm_text(value))
+
+    def test_every_document_reads_and_words_the_same_in_every_zone(self):
+        for zone in ZONES:
+            self.in_zone(zone)
+            for name, doc in UPLINKS.items():
+                with self.subTest(zone=zone, doc=name):
+                    row = controls.parse_uplink(json.dumps(doc))
+                    js = self.js[zone]["docs"][name]
+                    self.assertEqual(js["row"], as_js(row))
+                    self.assertEqual(js["indicator"], controls.uplink_indicator(row, UPLINK_NOW))
+                    self.assertEqual(
+                        js["checked"], [controls.uplink_checked(row, m) for m in controls.UPLINK_MODES]
+                    )
+                    self.assertEqual(
+                        js["enabled"], [controls.uplink_enabled(row, False), controls.uplink_enabled(row, True)]
+                    )
+                    self.assertEqual(
+                        js["durationEnabled"],
+                        [controls.uplink_duration_enabled(row, False), controls.uplink_duration_enabled(row, True)],
+                    )
+                    self.assertEqual(js["untouched"], as_js(controls.effective_uplink(row, ())))
+                    for m, got in zip(controls.UPLINK_MODES, js["effective"]):
+                        want = controls.effective_uplink(row, (controls.uplink_pending(m),))
+                        self.assertEqual(got["row"], as_js(want))
+                        self.assertEqual(got["indicator"], controls.uplink_indicator(want, UPLINK_NOW))
+
+    def test_network_repair_rules_and_words_are_the_same_in_every_zone(self):
+        for zone in ZONES:
+            self.in_zone(zone)
+            for name, doc in UPLINKS.items():
+                with self.subTest(zone=zone, doc=name):
+                    row = controls.parse_uplink(json.dumps(doc))
+                    js = self.js[zone]["repair"][name]
+                    self.assertEqual(js["active"], controls.repair_active(row))
+                    self.assertEqual(js["next"], controls.repair_next_mode(row))
+                    self.assertEqual(
+                        js["enabled"], [controls.repair_enabled(row, False), controls.repair_enabled(row, True)]
+                    )
+                    self.assertEqual(js["tooltip"], controls.repair_tooltip(row, UPLINK_NOW))
+                    on = controls.effective_uplink(row, (controls.uplink_pending("cell-first"),))
+                    off = controls.effective_uplink(row, (controls.uplink_pending("auto"),))
+                    self.assertEqual(js["pendingOn"], controls.repair_active(on))
+                    self.assertEqual(js["pendingOff"], controls.repair_active(off))
+
+    def test_the_icon_state_mapping_is_not_vacuous(self):
+        # Guards the guard: both answers occur, and the tooltip is worded.
+        js = self.js["UTC"]["repair"]
+        self.assertEqual({v["active"] for v in js.values()}, {True, False})
+        self.assertEqual(js["cell-first"]["tooltip"], "Network Repair: cellular first, until 14:30")
+        self.assertEqual(js["cell-first-no-expiry"]["tooltip"], "Network Repair: cellular first, no expiry")
+        self.assertEqual(js["auto-wifi"]["tooltip"], "")
+        self.assertEqual(self.js["America/New_York"]["repair"]["cell-first"]["tooltip"],
+                         "Network Repair: cellular first, until 09:30")
+
+    def test_the_zones_really_differ(self):
+        # Guards the guard: were the zone ignored, every zone would agree.
+        docs = {z: self.js[z]["docs"]["cell-first"]["indicator"] for z in ZONES}
+        self.assertEqual(
+            docs,
+            {
+                "UTC": "Network Repair: cellular first, until 14:30",
+                "America/New_York": "Network Repair: cellular first, until 09:30",
+                "Asia/Kolkata": "Network Repair: cellular first, until 20:00",
+            },
+        )
+
+    def test_every_poll_means_the_same(self):
+        for name, (code, stdout, stderr) in UPLINK_POLLS.items():
+            with self.subTest(poll=name):
+                py = controls.poll_outcome("uplink", True, False, code, stdout, stderr)
+                js = self.js["UTC"]["polls"][name]
+                self.assertEqual(js["doc"], None if py.doc is None else as_js(py.doc))
+                self.assertEqual(js["unsupported"], py.unsupported)
+                self.assertEqual(js["error"], py.error)
+                self.assertEqual(js["keep"], py.keep)
+
+    def test_a_helper_without_the_verb_is_unsupported_in_both(self):
+        self.assertTrue(self.js["UTC"]["polls"]["old-helper"]["unsupported"])
+        self.assertEqual(self.js["UTC"]["polls"]["old-helper"]["error"], "")
+
+    def test_every_argv_is_the_same_or_refused_in_both(self):
+        self.assertGreater(len(UPLINK_ARGV_CASES), 50)
+        accepted = 0
+        for case, js in zip(UPLINK_ARGV_CASES, self.js["UTC"]["argv"]):
+            with self.subTest(case=case):
+                try:
+                    program, args = controls.uplink_argv(case["helper"], case["mode"], case["duration"])
+                    self.assertEqual(js, {"ok": [program, *args]})
+                    accepted += 1
+                except ValueError:
+                    self.assertEqual(js, {"refused": True})
+        # Both agree on what is refused; the two modes each take the six
+        # durations the tray offers, and nothing else gets through.
+        self.assertEqual(accepted, 12)
+
+    def test_the_pending_key_and_the_poll_argv_are_the_same(self):
+        js = self.js["UTC"]
+        self.assertEqual(js["pendingKey"], list(controls.uplink_pending("cell-first")))
+        self.assertEqual(js["pollArgv"], [HELPER, "uplink", "state"])
 
 
 if __name__ == "__main__":

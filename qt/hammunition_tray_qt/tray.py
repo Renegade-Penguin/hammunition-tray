@@ -21,9 +21,9 @@ from pathlib import Path
 
 from PyQt6.QtCore import QLockFile, QObject, QProcess, QStandardPaths, QTimer
 from PyQt6.QtGui import QAction, QCursor, QIcon
-from PyQt6.QtWidgets import QApplication, QMenu, QStyle, QSystemTrayIcon
+from PyQt6.QtWidgets import QApplication, QMenu, QMessageBox, QStyle, QSystemTrayIcon
 
-from . import logic
+from . import controls, logic
 from .logic import MenuEntry, ProcResult, TrayState
 
 # A poll that has not answered in this long is killed and reported as a
@@ -36,6 +36,7 @@ _CHECKOUT_ICONS = Path(__file__).resolve().parents[2] / "plasmoid/package/conten
 _CHECKOUT_FILES = {
     logic.ICON_AWAKE: "hammunition-devices-awake.svg",
     logic.ICON_PARKED: "hammunition-devices-parked.svg",
+    logic.ICON_REPAIR: "hammunition-devices-repair.svg",
 }
 
 Done = Callable[[ProcResult], None]
@@ -101,9 +102,14 @@ def _menu_text(text: str) -> str:
 
 
 class Tray(QObject):
-    def __init__(self, runner: QtRunner | None = None) -> None:
+    def __init__(
+        self, runner: QtRunner | None = None, confirm: Callable[[str], bool] | None = None
+    ) -> None:
         super().__init__()
         self.runner = runner or QtRunner(self)
+        # Asked before Network Repair, which uses mobile data. A test passes its
+        # own, so no dialog is ever opened under test.
+        self.confirm: Callable[[str], bool] = confirm or self._ask_confirm
         self.state = TrayState()
         self._polling = False
         self._repoll = False
@@ -113,6 +119,7 @@ class Tray(QObject):
         # Likewise one guard each for the Services and Radios groups.
         self._services_polling = False
         self._radios_polling = False
+        self._uplink_polling = False
         self._model: list[MenuEntry] | None = None
 
         self.menu = QMenu()
@@ -139,11 +146,12 @@ class Tray(QObject):
     # -- polling ---------------------------------------------------------
 
     def refresh(self) -> None:
-        # All four documents on every tick, each with its own guard.
+        # All five documents on every tick, each with its own guard.
         self._refresh_time()
         self._refresh_devices()
         self._refresh_services()
         self._refresh_radios()
+        self._refresh_uplink()
 
     def _refresh_services(self) -> None:
         if self._services_polling:
@@ -186,6 +194,26 @@ class Tray(QObject):
         self._render()
         if started != self.state.epoch:
             self._refresh_radios()
+
+    def _refresh_uplink(self) -> None:
+        if self._uplink_polling:
+            return
+        self._uplink_polling = True
+        program, args = logic.uplink_poll_argv()
+        started = self.state.epoch
+        self.runner.run(
+            program,
+            args,
+            lambda result: self._uplink_polled(result, started),
+            timeout_ms=POLL_TIMEOUT_MS,
+        )
+
+    def _uplink_polled(self, result: ProcResult, started: int) -> None:
+        self._uplink_polling = False
+        self.state = logic.apply_uplink_poll(self.state, result, started)
+        self._render()
+        if started != self.state.epoch:
+            self._refresh_uplink()
 
     def _refresh_devices(self) -> None:
         if self._polling:
@@ -241,7 +269,42 @@ class Tray(QObject):
         self._render(force=True)
         self.refresh()
 
+    def _ask_confirm(self, text: str) -> bool:
+        """The default confirmation: a question box whose default and escape
+        button is Cancel, so a stray Enter never turns mobile data on."""
+        box = QMessageBox(QMessageBox.Icon.Question, logic.TITLE, text)
+        yes = box.addButton(controls.UPLINK_CONFIRM_YES, QMessageBox.ButtonRole.AcceptRole)
+        no = box.addButton(controls.UPLINK_CONFIRM_NO, QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(no)
+        box.setEscapeButton(no)
+        box.exec()
+        return box.clickedButton() is yes
+
+    def act_uplink(self, entry: MenuEntry) -> None:
+        if entry.kind == "uplink-duration":
+            # Only the choice for the next Network Repair: nothing runs.
+            if entry.duration is not None and not self.state.acting:
+                self.state = logic.set_uplink_duration(self.state, entry.duration)
+            self._render(force=True)
+            return
+        if self.state.acting or entry.verb is None or entry.duration is None:
+            return
+        if entry.checked and entry.kind != "repair":
+            # Already the mode: the item unchecked itself on the click. (The
+            # Network Repair item is a toggle: checked means a click turns it off.)
+            self._render(force=True)
+            return
+        if controls.uplink_needs_confirm(entry.verb) and not self.confirm(
+            controls.uplink_confirm_text(entry.duration)
+        ):
+            self._render(force=True)
+            return
+        self.act_control(entry)
+
     def act(self, entry: MenuEntry) -> None:
+        if entry.kind in ("uplink-mode", "uplink-duration", "repair"):
+            self.act_uplink(entry)
+            return
         if entry.kind in ("service-run", "service-login", "radio"):
             self.act_control(entry)
             return
@@ -307,10 +370,16 @@ class Tray(QObject):
             action = QAction(_menu_text(entry.text), self.menu)
             action.setToolTip(entry.text)
             action.setEnabled(entry.enabled)
-            if entry.kind in ("toggle", "mode", "service-run", "service-login", "radio"):
+            if entry.kind in (
+                "toggle", "mode", "service-run", "service-login", "radio", "uplink-mode", "uplink-duration",
+                "repair",
+            ):
                 action.setCheckable(True)
                 action.setChecked(bool(entry.checked))
-            if entry.kind in ("toggle", "forget", "mode", "service-run", "service-login", "radio"):
+            if entry.kind in (
+                "toggle", "forget", "mode", "service-run", "service-login", "radio", "uplink-mode",
+                "uplink-duration", "repair",
+            ):
                 action.triggered.connect(lambda _=False, e=entry: self.act(e))
             elif entry.kind == "quit":
                 action.triggered.connect(QApplication.quit)
